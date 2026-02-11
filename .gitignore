@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Testing
+coverage/
+*.log
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Package manager
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Large model files — never commit
+*.safetensors
+*.ckpt
+
+# Workspace (active datasets, generation outputs, configs in progress)
+workspace/datasets/*/
+workspace/outputs/*
+!workspace/outputs/.gitkeep
+workspace/configs/*
+!workspace/configs/.gitkeep
+
+# Exports (final approved assets)
+exports/*
+!exports/.gitkeep
+
+# Grimoire state (user data — track templates, exclude user content)
+grimoire/training/*
+!grimoire/training/.gitkeep
+grimoire/library/*
+!grimoire/library/.gitkeep
+grimoire/projects/*
+!grimoire/projects/.gitkeep
+grimoire/workflows/*
+!grimoire/workflows/.gitkeep

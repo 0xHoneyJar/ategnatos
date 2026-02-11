@@ -1,0 +1,4 @@
+name: art
+version: 0.1.0
+description: "Art Director's Assistant — prompt crafting, generation, iteration, export"
+danger_level: safe

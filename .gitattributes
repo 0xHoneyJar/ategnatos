@@ -1,0 +1,20 @@
+# Line ending normalization
+* text=auto
+
+# Shell scripts should always have LF endings
+*.sh text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.safetensors binary
+*.ckpt binary
+
+# Diff settings
+*.md diff=markdown
+*.json diff=json

@@ -1,0 +1,4 @@
+name: train
+version: 0.1.0
+description: "Training Specialist — LoRA training with bulletproof dataset validation"
+danger_level: high

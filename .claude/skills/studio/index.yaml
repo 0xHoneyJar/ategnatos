@@ -1,0 +1,4 @@
+name: studio
+version: 1.0.0
+description: "Studio Manager — environment setup, GPU detection, ComfyUI, model inventory"
+danger_level: moderate
