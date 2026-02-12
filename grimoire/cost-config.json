@@ -1,0 +1,7 @@
+{
+  "max_hourly_rate": 3.00,
+  "max_total_cost": 50.00,
+  "max_runtime_minutes": 480,
+  "auto_teardown_minutes": 60,
+  "require_confirm": true
+}

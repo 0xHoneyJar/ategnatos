@@ -19,6 +19,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../lib/validate-lib.sh
+source "$SCRIPT_DIR/../lib/validate-lib.sh"
+# shellcheck source=../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../lib/secrets-lib.sh"
+
 GRIMOIRE_STUDIO=""
 PROVIDER=""
 INSTANCE_ID=""
@@ -89,6 +96,11 @@ LOCAL_DEST="${LOCAL_DEST:-./results/}"
 if ! $TEAR_ALL && [[ -z "$PROVIDER" || -z "$INSTANCE_ID" ]]; then
     echo "Error: --provider and --instance are required (or use --all)" >&2
     exit 1
+fi
+
+# Validate provider against allowlist (if specified)
+if [[ -n "$PROVIDER" ]]; then
+    validate_provider_id "$PROVIDER"
 fi
 
 # --- Auto-detect grimoire ---

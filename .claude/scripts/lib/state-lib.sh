@@ -35,6 +35,8 @@ state_init() {
     studio)
       cat > "$json_file" <<'JSON'
 {
+  "_schema_version": "1.0",
+  "_generated_at": null,
   "environment": {
     "gpu": null,
     "cuda_version": null,
@@ -49,7 +51,7 @@ state_init() {
 JSON
       ;;
     *)
-      echo '{}' > "$json_file"
+      echo '{"_schema_version": "1.0", "_generated_at": null}' > "$json_file"
       ;;
   esac
 
@@ -192,7 +194,24 @@ _sync_studio() {
   local json_file="$1"
   local md_file="grimoire/studio.md"
 
+  # Update _generated_at timestamp in JSON before syncing
+  local tmp_file="${json_file}.tmp"
+  local iso_timestamp
+  iso_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  jq --arg ts "$iso_timestamp" '._generated_at = $ts' "$json_file" > "$tmp_file"
+  mv "$tmp_file" "$json_file"
+
+  # Backup existing MD file before overwriting
+  if [[ -f "$md_file" ]]; then
+    cp "$md_file" "${md_file}.bak"
+  fi
+
+  # Compute SHA256 hash of JSON file (first 8 chars)
+  local json_hash
+  json_hash=$(shasum -a 256 "$json_file" | cut -c1-8)
+
   {
+    echo "<!-- GENERATED — DO NOT EDIT. Source: ${json_file} (hash: ${json_hash}) -->"
     echo "# Studio"
     echo ""
     echo "## Environment"
@@ -258,10 +277,99 @@ _sync_studio() {
 }
 
 # ──────────────────────────────────────────────
+# state_check <scope>
+# Compare MD header hash against current JSON hash
+# Returns: 0=clean, 1=drift, 2=missing files
+# ──────────────────────────────────────────────
+state_check() {
+  local scope="$1"
+
+  if [[ -z "$scope" ]]; then
+    echo "Error: state_check requires a scope." >&2
+    return 1
+  fi
+
+  local json_file="$STATE_DIR/${scope}.json"
+  local md_file="grimoire/${scope}.md"
+
+  if [[ ! -f "$json_file" || ! -f "$md_file" ]]; then
+    echo "missing"
+    return 2
+  fi
+
+  # Extract hash from MD header: <!-- GENERATED ... (hash: XXXXXXXX) -->
+  local header_hash
+  header_hash=$(head -1 "$md_file" | sed -n 's/.*hash: \([a-f0-9]*\).*/\1/p')
+
+  if [[ -z "$header_hash" ]]; then
+    echo "drift detected (no header hash)"
+    return 1
+  fi
+
+  # Compute current hash from JSON file
+  local current_hash
+  current_hash=$(shasum -a 256 "$json_file" | cut -c1-8)
+
+  if [[ "$header_hash" = "$current_hash" ]]; then
+    echo "clean"
+    return 0
+  else
+    echo "drift detected (header: ${header_hash}, current: ${current_hash})"
+    return 1
+  fi
+}
+
+# ──────────────────────────────────────────────
+# state_backup <scope>
+# Create timestamped backup copies of JSON and MD
+# ──────────────────────────────────────────────
+state_backup() {
+  local scope="$1"
+
+  if [[ -z "$scope" ]]; then
+    echo "Error: state_backup requires a scope." >&2
+    return 1
+  fi
+
+  local timestamp
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  local json_file="$STATE_DIR/${scope}.json"
+  local md_file="grimoire/${scope}.md"
+
+  [[ -f "$json_file" ]] && cp "$json_file" "${json_file}.${timestamp}.bak"
+  [[ -f "$md_file" ]] && cp "$md_file" "${md_file}.${timestamp}.bak"
+
+  echo "Backup created: ${timestamp}"
+}
+
+# ──────────────────────────────────────────────
+# state_schema_version <scope>
+# Returns the _schema_version from the JSON file
+# ──────────────────────────────────────────────
+state_schema_version() {
+  local scope="$1"
+
+  if [[ -z "$scope" ]]; then
+    echo "Error: state_schema_version requires a scope." >&2
+    return 1
+  fi
+
+  local json_file="$STATE_DIR/${scope}.json"
+  if [[ ! -f "$json_file" ]]; then
+    echo "Error: State file not found: $json_file" >&2
+    return 1
+  fi
+
+  jq -r '._schema_version // "unknown"' "$json_file"
+}
+
+# ──────────────────────────────────────────────
 # state_migrate <scope>
 # Parse existing markdown into JSON state
 # ──────────────────────────────────────────────
 state_migrate() {
+  echo "WARNING: state_migrate is deprecated. One-time migration utility only." >&2
+
   local scope="$1"
 
   if [[ -z "$scope" ]]; then

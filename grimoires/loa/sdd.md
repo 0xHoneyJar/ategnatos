@@ -1009,4 +1009,367 @@ ategnatos/
 
 ---
 
-*SDD updated for Cycle 2. Addendum covers new scripts, templates, state management, test framework, and documentation restructuring.*
+## Cycle 3 Addendum — Security, Resilience & Operational Maturity
+
+**Date**: 2026-02-12
+**Source PRD**: grimoires/loa/prd.md v3.0
+**Source**: Flatline Protocol adversarial review (GPT-5.2 + Claude Opus 4.6)
+
+### C3.1 Security Architecture
+
+#### Input Validation Library (`validate-lib.sh`)
+
+```
+.claude/scripts/lib/validate-lib.sh
+```
+
+Functions:
+```bash
+source .claude/scripts/lib/validate-lib.sh
+
+validate_path <path>                    # Rejects: .., symlink escapes, null bytes
+validate_url <url>                      # Rejects: non-http(s), credentials in URL
+validate_url_localhost <url>            # Requires: 127.0.0.1 or localhost
+validate_provider_id <id>              # Allowlist: vast, runpod, lambda, local
+validate_backend_id <id>               # Allowlist: kohya, simpletuner, ai-toolkit
+validate_positive_int <value>          # Rejects: non-numeric, negative, zero
+validate_json_file <path>              # Validates: exists, valid JSON, no eval-able content
+```
+
+Design:
+- All functions return 0 (valid) or 1 (invalid) with stderr message
+- Allowlists are hardcoded constants, not configurable (prevents injection via config)
+- Path validation uses `realpath` to resolve symlinks, rejects paths outside project root
+- URL validation uses bash pattern matching, no external commands
+
+#### Secrets Library (`secrets-lib.sh`)
+
+```
+.claude/scripts/lib/secrets-lib.sh
+```
+
+Functions:
+```bash
+source .claude/scripts/lib/secrets-lib.sh
+
+load_secret <name>                     # Load from env var, then ~/.config/ategnatos/secrets
+redact_log <text>                      # Mask patterns: sk-*, ssh-*, API keys, tokens
+safe_log <text>                        # Alias: echo "$(redact_log "$text")" >&2
+```
+
+Secret resolution order:
+1. Environment variable (e.g., `VASTAI_API_KEY`)
+2. `~/.config/ategnatos/secrets` file (format: `KEY=value`, perms 0600)
+3. Fail with clear message: "Secret 'VASTAI_API_KEY' not found. Set it as an env var or add to ~/.config/ategnatos/secrets"
+
+Redaction patterns:
+```
+sk-[A-Za-z0-9]{10,}     → sk-***<last4>
+ssh-[a-z]{3,}\s+\S+     → ssh-***REDACTED
+[A-Za-z0-9]{32,}        → (only if preceded by key/token/secret/password context)
+```
+
+#### ComfyUI Security Gate (`comfyui-security-check.sh`)
+
+```
+.claude/scripts/studio/comfyui-security-check.sh
+```
+
+Interface:
+```bash
+comfyui-security-check.sh --url <endpoint> [--allow-remote] [--json]
+```
+
+Checks:
+1. Parse URL → extract host
+2. If host is `127.0.0.1`, `localhost`, or `::1` → PASS
+3. If host is private IP (10.x, 172.16-31.x, 192.168.x) → WARN (likely OK but not guaranteed)
+4. If host is public IP → FAIL unless `--allow-remote`
+5. If `--allow-remote`, verify SSH tunnel is active (check for `ssh -L` process targeting that port)
+
+Integration: `comfyui-submit.sh` calls this before every submission. `--skip-security` flag available for advanced users.
+
+#### Hardened Scripting Standard
+
+Document: `.claude/skills/studio/resources/scripting-standard.md`
+
+Rules enforced:
+1. `set -euo pipefail` on line 2 of every script
+2. All variables double-quoted: `"$var"` not `$var`
+3. No `eval`, no `source` of untrusted files
+4. External input validated via `validate-lib.sh` before use
+5. Array expansion: `"${array[@]}"` not `${array[*]}`
+6. Temporary files via `mktemp` with trap cleanup
+7. shellcheck clean at default warning level
+8. `# shellcheck disable=SCXXXX` requires inline justification comment
+
+### C3.2 State Architecture (Revised)
+
+#### Authority Model
+
+```
+JSON (canonical) → Markdown (generated view, read-only)
+```
+
+The Cycle 2 `state_migrate` function is deprecated for normal use. It remains as a one-time migration tool with a prominent warning.
+
+#### Enhanced `state-lib.sh`
+
+New/modified functions:
+```bash
+state_sync "studio"                    # Now adds <!-- GENERATED --> header + source hash
+state_check "studio"                   # Compares MD hash vs JSON hash, returns drift status
+state_backup "studio"                  # Copies JSON + MD to .bak with timestamp
+state_schema_version "studio"          # Returns _schema_version from JSON
+```
+
+`state_sync` output format:
+```markdown
+<!-- GENERATED — DO NOT EDIT. Source: grimoire/.state/studio.json (hash: a1b2c3d4) -->
+<!-- Use /studio to modify. Manual edits will be overwritten. -->
+
+# Studio
+
+## Environment
+...
+```
+
+`state_check` behavior:
+1. Read hash from MD header comment
+2. Compute current hash of JSON file (`shasum -a 256`)
+3. If match → return 0 ("in sync")
+4. If mismatch → return 1 ("drift detected") with details
+5. Skills call `state_check` at start and warn user if drift detected
+
+#### Schema Versioning
+
+```json
+{
+  "_schema_version": "1.0",
+  "_generated_at": "2026-02-12T12:00:00Z",
+  "environment": { ... },
+  "models": [ ... ],
+  "loras": [ ... ],
+  "active_instances": [ ... ]
+}
+```
+
+Migration path: if `_schema_version` is missing or < current, run migration function before proceeding.
+
+### C3.3 Resource Contention
+
+#### Lock Library (`resource-lock.sh`)
+
+```
+.claude/scripts/lib/resource-lock.sh
+```
+
+Functions:
+```bash
+source .claude/scripts/lib/resource-lock.sh
+
+lock_acquire <resource> [--timeout 30] [--holder "art"]  # Create advisory lock
+lock_release <resource>                                    # Release lock
+lock_check <resource>                                      # Check status (JSON)
+lock_force_release <resource>                              # Force release (admin)
+```
+
+Lock file format: `/tmp/ategnatos-lock-<resource_hash>.lock`
+```json
+{
+  "resource": "comfyui:localhost:8188",
+  "holder": "art",
+  "pid": 12345,
+  "acquired_at": "2026-02-12T12:00:00Z"
+}
+```
+
+Stale detection: if PID in lockfile is not running (`kill -0 $pid`), auto-release and log warning.
+
+Resource naming convention:
+- `comfyui:<host>:<port>` — ComfyUI endpoint
+- `gpu:<provider>:<instance_id>` — GPU instance
+- `training:<run_id>` — Training run
+
+### C3.4 Cost Enforcement
+
+#### Cost Guard (`cost-guard.sh`)
+
+```
+.claude/scripts/lib/cost-guard.sh
+```
+
+Configuration file: `grimoire/cost-config.json`
+```json
+{
+  "max_hourly_rate": 3.00,
+  "max_total_cost": 50.00,
+  "max_runtime_minutes": 480,
+  "auto_teardown_minutes": 60,
+  "require_confirm": true
+}
+```
+
+Functions:
+```bash
+source .claude/scripts/lib/cost-guard.sh
+
+cost_check --operation train --estimated 5.00     # Check against budget
+cost_start_timer --resource vast-123 --max-minutes 120  # Start watchdog timer
+cost_stop_timer --resource vast-123               # Stop timer
+cost_teardown_overdue                             # Check all timers, warn/teardown
+cost_report                                        # Show current spend summary
+```
+
+Timer storage: `/tmp/ategnatos-cost-timer-<resource_hash>.json`
+
+Integration: all billable scripts (`provider-spinup.sh`, `launch-training.sh`) call `cost_check` and `cost_start_timer`.
+
+### C3.5 SSH Resilience
+
+#### SSH Execution Library (`ssh-lib.sh`)
+
+```
+.claude/scripts/lib/ssh-lib.sh
+```
+
+Functions:
+```bash
+source .claude/scripts/lib/ssh-lib.sh
+
+ssh_exec <host> <command> [--retries 3] [--backoff-base 5]  # Execute with retry
+ssh_tmux_create <host> <session_name>                        # Create persistent tmux session
+ssh_tmux_send <host> <session_name> <command>                # Send command to tmux
+ssh_tmux_attach <host> <session_name>                        # Attach to tmux
+ssh_phase_mark <host> <phase_name>                           # Write phase marker
+ssh_phase_check <host> <phase_name>                          # Check if phase completed
+ssh_reconnect_status <host>                                  # Read all phase markers
+```
+
+Phase markers: `~/.ategnatos-phases/<phase_name>.done` on remote host.
+
+Retry behavior: exponential backoff (5s, 10s, 20s) with connection timeout of 10s per attempt.
+
+### C3.6 Training Recovery
+
+#### Enhanced `monitor-training.sh`
+
+New checks added to monitoring loop:
+1. **Disk space**: `df -h <training_dir>` — warn at 90%, abort at 95%
+2. **Checkpoint integrity**: verify file size > 0, file not still being written (flock check)
+3. **Process health**: verify training PID is still running
+4. **VRAM usage**: log peak VRAM per checkpoint interval
+
+#### Training State (`training-state.json`)
+
+```json
+{
+  "run_id": "train-20260212-120000",
+  "backend": "kohya",
+  "config_path": "workspace/configs/mystyle.toml",
+  "dataset_path": "workspace/datasets/mystyle/",
+  "output_dir": "workspace/training/mystyle/",
+  "status": "running",
+  "started_at": "2026-02-12T12:00:00Z",
+  "last_checkpoint": "workspace/training/mystyle/epoch-10.safetensors",
+  "last_checkpoint_at": "2026-02-12T12:30:00Z",
+  "total_steps": 1500,
+  "completed_steps": 750,
+  "provider": "vast",
+  "instance_id": "12345"
+}
+```
+
+Written by `launch-training.sh` at start, updated by `monitor-training.sh` at each checkpoint.
+
+Resume command construction per backend:
+- **Kohya**: `--network_weights <last_checkpoint> --initial_epoch <epoch>`
+- **SimpleTuner**: `--resume_from_checkpoint <last_checkpoint>`
+- **AI-Toolkit**: restart with same config (auto-detects latest checkpoint in output dir)
+
+### C3.7 ComfyUI Preflight
+
+#### Node Validation (`comfyui-preflight.sh`)
+
+```
+.claude/scripts/studio/comfyui-preflight.sh
+```
+
+Interface:
+```bash
+comfyui-preflight.sh --workflow <path.json> --url <endpoint> [--json]
+```
+
+Behavior:
+1. Query ComfyUI `/object_info` → get list of installed node types
+2. Parse workflow JSON → extract all `class_type` values
+3. Compare: installed ∩ required → report missing
+4. Look up missing nodes in `resources/comfyui/node-registry.md` → provide install instructions
+5. Exit 0 if all nodes present, exit 1 if missing
+
+#### Node Registry (`node-registry.md`)
+
+```
+.claude/skills/studio/resources/comfyui/node-registry.md
+```
+
+Format:
+```markdown
+| Node Class | Package | Install Command | Notes |
+|-----------|---------|----------------|-------|
+| ControlNetApplyAdvanced | comfyui_controlnet_aux | cd custom_nodes && git clone ... | Required for ControlNet workflows |
+| UpscaleModelLoader | built-in | N/A | Included with ComfyUI |
+```
+
+### C3.8 New File System Additions
+
+```
+ategnatos/
+├── .claude/
+│   ├── scripts/
+│   │   ├── lib/
+│   │   │   ├── state-lib.sh           # (enhanced: state_check, state_backup, schema version)
+│   │   │   ├── validate-lib.sh        # NEW — input validation
+│   │   │   ├── secrets-lib.sh         # NEW — secret loading + log redaction
+│   │   │   ├── resource-lock.sh       # NEW — advisory lock mechanism
+│   │   │   ├── cost-guard.sh          # NEW — budget enforcement
+│   │   │   └── ssh-lib.sh             # NEW — SSH resilience
+│   │   └── studio/
+│   │       ├── comfyui-security-check.sh  # NEW — endpoint security gate
+│   │       └── comfyui-preflight.sh       # NEW — node validation
+│   └── skills/
+│       └── studio/
+│           └── resources/
+│               ├── comfyui/
+│               │   ├── security.md         # NEW — hardening guide
+│               │   ├── compatibility.md    # NEW — version requirements
+│               │   └── node-registry.md    # NEW — node → package mapping
+│               ├── providers/
+│               │   └── provider-contract.md  # NEW — provider interface spec
+│               └── scripting-standard.md    # NEW — hardened scripting rules
+├── grimoire/
+│   ├── cost-config.json               # NEW — budget limits
+│   └── .state/
+│       └── studio.json                # (enhanced: _schema_version, _generated_at)
+└── tests/
+    ├── test-validate-lib.sh           # NEW
+    ├── test-secrets-lib.sh            # NEW
+    ├── test-resource-lock.sh          # NEW
+    ├── test-cost-guard.sh             # NEW
+    └── test-comfyui-preflight.sh      # NEW
+```
+
+### C3.9 Security Threat Model
+
+| Threat | Vector | Mitigation | Component |
+|--------|--------|------------|-----------|
+| Command injection via filenames | Malicious image filenames with shell metacharacters | `validate_path()` + strict quoting | validate-lib.sh |
+| Credential leak in logs | API keys echoed during provider operations | `redact_log()` wraps all logging | secrets-lib.sh |
+| Unauthenticated ComfyUI access | Public IP endpoint on cloud GPU | Localhost-only default + security check | comfyui-security-check.sh |
+| Runaway GPU billing | Forgotten instances, crashed sessions | Auto-teardown timer + billing watchdog | cost-guard.sh |
+| Corrupted training state | Partial writes, disk full, SSH drop | Atomic writes + checkpoint validation | state-lib.sh, monitor-training.sh |
+| Resource contention | /art + /train hit same GPU | Advisory locks with stale detection | resource-lock.sh |
+
+---
+
+*SDD updated for Cycle 3. Addendum covers security hardening, state architecture resolution, resource contention, cost enforcement, SSH resilience, training recovery, and ComfyUI operational improvements.*

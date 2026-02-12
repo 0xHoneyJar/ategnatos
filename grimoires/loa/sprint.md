@@ -1,10 +1,10 @@
-# Ategnatos Cycle 2 — Sprint Plan
+# Ategnatos Cycle 3 — Sprint Plan
 
-**Version**: 2.0
-**Date**: 2026-02-11
-**Source PRD**: grimoires/loa/prd.md v2.0
-**Source SDD**: grimoires/loa/sdd.md (Cycle 2 Addendum)
-**Cycle**: 2 — Hardening & Functional Completeness
+**Version**: 3.0
+**Date**: 2026-02-12
+**Source PRD**: grimoires/loa/prd.md v3.0
+**Source SDD**: grimoires/loa/sdd.md (Cycle 3 Addendum)
+**Cycle**: 3 — Security, Resilience & Operational Maturity
 
 ---
 
@@ -15,473 +15,716 @@
 | Team | 1 human (Creative Director) + AI (Claude Code) |
 | Sprint count | 4 |
 | Sprint duration | Flexible — milestone-based |
-| Scope | Bug fixes, architectural completions, doc cleanup, infrastructure |
-| Total tasks | 22 |
+| Scope | Security hardening, state architecture, operational resilience, ComfyUI ops, specs |
+| Total tasks | 24 |
+| Source | Flatline Protocol adversarial review (GPT-5.2 + Claude Opus 4.6) |
 
 ### Sprint Dependency Chain
 
 ```
-Sprint 1: Bug Fixes & Quick Wins
+Sprint 1: Security Foundation (SEC-001, SEC-003)
          │
-         ├── Sprint 2: Training Pipeline Completeness
+         ├── Sprint 2: Security Gates & State Architecture (SEC-002, STATE-001)
          │
-         ├── Sprint 3: Generation Pipeline Expansion
-         │
-         └── Sprint 4: Infrastructure & Testing (depends on 1-3)
+         └── Sprint 3: Operational Resilience (OPS-001, OPS-003, COMFY-001)
+                  │
+                  └── Sprint 4: SSH, Recovery, Specs & E2E (OPS-002, OPS-004, COMFY-002, SPEC-001, SPEC-002)
 ```
 
-Sprints 2 and 3 can run in parallel after Sprint 1. Sprint 4 depends on all prior sprints.
+Sprint 1 is the foundation — all security libraries must exist before they can be integrated.
+Sprints 2 and 3 can run in parallel after Sprint 1.
+Sprint 4 depends on Sprints 2 and 3.
 
 ---
 
-## Sprint 1 (Global #7): Bug Fixes & Quick Wins
+## Sprint 1 (Global #11): Security Foundation
 
-**Label**: Bug Fixes & Quick Wins
-**Goal**: Fix all known bugs and clean up documentation inconsistencies. Zero known defects after this sprint.
+**Label**: Security Foundation
+**Goal**: Establish the core security libraries and hardened scripting standard that all subsequent work depends on.
 
 ### Tasks
 
-#### S1-T1: Fix eval-grid.sh ComfyUI script calls
-**PRD Ref**: BUG-001
-**File**: `.claude/scripts/train/eval-grid.sh` (lines 251-255)
+#### S1-T1: Create validate-lib.sh — Input Validation Library
+**PRD Ref**: SEC-001
+**SDD Ref**: C3.1 (Input Validation Library)
+**File**: `.claude/scripts/lib/validate-lib.sh` (NEW)
 
-**Current (broken)**:
+**Description**: Create the input validation library with allowlist-based validators.
+
+Functions to implement:
 ```bash
-PROMPT_ID=$("$STUDIO_SCRIPTS/comfyui-submit.sh" --workflow "$WORKFLOW_FILE" --url "$COMFYUI_URL" --json ...)
-"$STUDIO_SCRIPTS/comfyui-poll.sh" --id "$PROMPT_ID" --url "$COMFYUI_URL" --output "$out_dir" --timeout 120
+validate_path <path>                    # Rejects: .., symlink escapes, null bytes
+validate_url <url>                      # Rejects: non-http(s), credentials in URL
+validate_url_localhost <url>            # Requires: 127.0.0.1 or localhost
+validate_provider_id <id>              # Allowlist: vast, runpod, lambda, local
+validate_backend_id <id>               # Allowlist: kohya, simpletuner, ai-toolkit
+validate_positive_int <value>          # Rejects: non-numeric, negative, zero
+validate_json_file <path>              # Validates: exists, valid JSON, no eval-able content
 ```
 
-**Fix**: Parse `COMFYUI_URL` into host/port. Use positional args:
-```bash
-# Extract host:port from URL
-COMFYUI_HOST=$(echo "$COMFYUI_URL" | sed 's|http://||' | cut -d: -f1)
-COMFYUI_PORT=$(echo "$COMFYUI_URL" | sed 's|http://||' | cut -d: -f2)
-
-PROMPT_ID=$("$STUDIO_SCRIPTS/comfyui-submit.sh" "$WORKFLOW_FILE" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --json ...)
-"$STUDIO_SCRIPTS/comfyui-poll.sh" "$PROMPT_ID" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --output "$out_dir" --timeout 120
-```
-
-**Acceptance Criteria**: eval-grid.sh calls match comfyui-submit.sh and comfyui-poll.sh documented interfaces exactly.
+**Acceptance Criteria**:
+- All functions return 0 (valid) or 1 (invalid) with stderr message
+- Path validation uses `realpath` to resolve symlinks, rejects paths outside project root
+- Allowlists are hardcoded constants
+- Script starts with `set -euo pipefail`
 
 ---
 
-#### S1-T2: Fix vastai-lifecycle.sh grep -oP portability
-**PRD Ref**: BUG-002
-**File**: `.claude/scripts/studio/providers/vastai-lifecycle.sh` (lines 250-251)
+#### S1-T2: Create secrets-lib.sh — Secrets Management Library
+**PRD Ref**: SEC-003
+**SDD Ref**: C3.1 (Secrets Library)
+**File**: `.claude/scripts/lib/secrets-lib.sh` (NEW)
 
-**Current (macOS-incompatible)**:
+**Description**: Create the secrets management library for credential loading and log redaction.
+
+Functions to implement:
 ```bash
-port=$(echo "$ssh_url" | grep -oP '(?<=-p )\d+')
-ip=$(echo "$ssh_url" | grep -oP '[^@\s]+$')
+load_secret <name>                     # Load from env var → ~/.config/ategnatos/secrets → fail
+redact_log <text>                      # Mask patterns: sk-*, ssh-*, API keys
+safe_log <text>                        # echo "$(redact_log "$text")" >&2
 ```
 
-**Fix**: Use sed (POSIX-compatible):
-```bash
-port=$(echo "$ssh_url" | sed -n 's/.*-p \([0-9]*\).*/\1/p')
-ip=$(echo "$ssh_url" | sed -n 's/.*@\([^ ]*\)$/\1/p')
-```
+Redaction patterns:
+- `sk-[A-Za-z0-9]{10,}` → `sk-***<last4>`
+- `ssh-[a-z]{3,}\s+\S+` → `ssh-***REDACTED`
+- Long alphanumeric strings preceded by key/token/secret/password context
 
-**Acceptance Criteria**: `do_pull()` function works on macOS BSD grep. No `grep -P` anywhere in codebase.
+**Acceptance Criteria**:
+- `load_secret VASTAI_API_KEY` loads from env var if set
+- `load_secret VASTAI_API_KEY` falls back to `~/.config/ategnatos/secrets`
+- `redact_log "my key is sk-abc123xyz789"` masks the key
+- Secret file check enforces 0600 permissions
+- Clear error message when secret not found
 
 ---
 
-#### S1-T3: Remove sprint labels from train SKILL.md
-**PRD Ref**: BUG-003
-**File**: `.claude/skills/train/SKILL.md`
+#### S1-T3: Create scripting-standard.md — Documentation
+**PRD Ref**: SEC-001
+**SDD Ref**: C3.1 (Hardened Scripting Standard)
+**File**: `.claude/skills/studio/resources/scripting-standard.md` (NEW)
 
-**Current**:
-```
-## Workflow — Dataset Phase (Sprint 3)
-## Workflow — Execution Phase (Sprint 4)
-## Workflow — Evaluation Phase (Sprint 5)
-```
+**Description**: Document the hardened scripting standard for all Ategnatos scripts.
 
-**Fix**:
-```
-## Workflow — Dataset Phase
-## Workflow — Execution Phase
-## Workflow — Evaluation Phase
-```
+Must cover:
+1. `set -euo pipefail` requirement
+2. Variable quoting rules
+3. No `eval` policy
+4. Input validation requirements
+5. Array expansion rules
+6. Temp file handling with `mktemp` + trap cleanup
+7. shellcheck compliance
+8. `# shellcheck disable` justification requirement
 
-**Acceptance Criteria**: Zero "(Sprint N)" text in any user-facing file.
+**Acceptance Criteria**:
+- Document exists with all 8 rules
+- Follows the standard resource file format (In Plain Language → What You Need to Know → Details)
 
 ---
 
-#### S1-T4: Consolidate CUDA compatibility files
-**PRD Ref**: DOC-001
-**Files**: `.claude/skills/studio/resources/cuda-compat.md`, `.claude/skills/train/resources/environment/cuda-pytorch-matrix.md`
+#### S1-T4: Create secrets policy document
+**PRD Ref**: SEC-003
+**SDD Ref**: C3.1 (Secrets Library)
+**File**: `.claude/skills/studio/resources/secrets-policy.md` (NEW)
 
-**Fix**: Replace `cuda-compat.md` content with a redirect:
+**Description**: Document the secrets management policy.
+
+Must cover:
+- Where to store secrets (env vars or `~/.config/ategnatos/secrets`)
+- Never store secrets in grimoire files or JSON state
+- SSH key handling guidance
+- Log redaction expectations
+
+**Acceptance Criteria**:
+- Document exists with clear guidance
+- References `secrets-lib.sh` for implementation
+
+---
+
+#### S1-T5: Audit and fix existing scripts for shellcheck compliance
+**PRD Ref**: SEC-001
+**SDD Ref**: C3.1 (Hardened Scripting Standard)
+**Files**: All scripts in `.claude/scripts/studio/`, `.claude/scripts/train/`, `.claude/scripts/lib/state-lib.sh`
+
+**Description**: Run shellcheck on all existing Ategnatos scripts and fix warnings.
+
+Steps:
+1. Run `shellcheck` on each script
+2. Fix all warnings (unquoted variables, missing `set -euo pipefail`, etc.)
+3. Add `# shellcheck disable=SCXXXX` with justification where truly intentional
+4. Verify `grep -r 'eval ' .claude/scripts/` returns zero results (Ategnatos scripts only)
+
+**Acceptance Criteria**:
+- All Ategnatos scripts pass shellcheck at default warning level
+- No `eval` in any Ategnatos script
+- All scripts have `set -euo pipefail`
+
+---
+
+#### S1-T6: Create test-validate-lib.sh and test-secrets-lib.sh
+**PRD Ref**: SEC-001, SEC-003
+**Files**: `tests/test-validate-lib.sh` (NEW), `tests/test-secrets-lib.sh` (NEW)
+
+**Description**: Test suites for the new security libraries.
+
+`test-validate-lib.sh` must test:
+- Valid and invalid paths (including `..` traversal, null bytes)
+- Valid and invalid URLs (http/https, credentials in URL)
+- Localhost URL validation
+- Provider ID allowlist (valid + invalid)
+- Backend ID allowlist
+- Positive integer validation
+- JSON file validation
+
+`test-secrets-lib.sh` must test:
+- Loading secrets from env vars
+- Loading secrets from file (with correct permissions)
+- Rejection of secrets file with wrong permissions
+- Redaction of `sk-` prefixed keys
+- Redaction of `ssh-` keys
+- Clear error on missing secret
+
+**Acceptance Criteria**:
+- Both test files execute successfully via `tests/run-all.sh`
+- Cover happy path and error cases for each function
+
+---
+
+## Sprint 2 (Global #12): Security Gates & State Architecture
+
+**Label**: Security Gates & State Architecture
+**Goal**: Secure ComfyUI endpoints by default and establish JSON as the single canonical source of truth for state.
+
+### Tasks
+
+#### S2-T1: Create comfyui-security-check.sh
+**PRD Ref**: SEC-002
+**SDD Ref**: C3.1 (ComfyUI Security Gate)
+**File**: `.claude/scripts/studio/comfyui-security-check.sh` (NEW)
+
+**Description**: Create the ComfyUI endpoint security validation script.
+
+Interface: `comfyui-security-check.sh --url <endpoint> [--allow-remote] [--json]`
+
+Logic:
+1. Parse URL → extract host
+2. `127.0.0.1`, `localhost`, `::1` → PASS
+3. Private IP (10.x, 172.16-31.x, 192.168.x) → WARN
+4. Public IP → FAIL unless `--allow-remote`
+5. If `--allow-remote`, verify SSH tunnel process exists
+
+Must source `validate-lib.sh` for URL validation.
+
+**Acceptance Criteria**:
+- `comfyui-security-check.sh --url http://127.0.0.1:8188` exits 0
+- `comfyui-security-check.sh --url http://203.0.113.5:8188` exits 1 with warning
+- `--allow-remote` flag allows public IPs
+- Uses `validate_url` from validate-lib.sh
+
+---
+
+#### S2-T2: Integrate security check into comfyui-submit.sh
+**PRD Ref**: SEC-002
+**SDD Ref**: C3.1
+**File**: `.claude/scripts/studio/comfyui-submit.sh` (MODIFY)
+
+**Description**: Add security gate to comfyui-submit.sh. Before submitting any workflow, call `comfyui-security-check.sh` to validate the endpoint.
+
+**Changes**:
+- Source `validate-lib.sh` and `secrets-lib.sh`
+- Call `comfyui-security-check.sh` before submission
+- Add `--allow-remote` passthrough flag
+- Add `--skip-security` escape hatch for advanced users
+- Wrap logging with `safe_log`
+
+**Acceptance Criteria**:
+- `comfyui-submit.sh` with remote URL exits 1 unless `--allow-remote`
+- `--skip-security` bypasses the check
+- No credentials appear in script output
+
+---
+
+#### S2-T3: Create ComfyUI security hardening guide
+**PRD Ref**: SEC-002
+**SDD Ref**: C3.1
+**File**: `.claude/skills/studio/resources/comfyui/security.md` (NEW)
+
+**Description**: Documentation for securing ComfyUI endpoints.
+
+Must cover:
+- Binding ComfyUI to 127.0.0.1 (not 0.0.0.0)
+- Firewall rules for cloud GPU instances
+- SSH tunnel setup (`ssh -L 8188:localhost:8188 user@gpu-instance`)
+- Why unauthenticated ComfyUI on a public IP is dangerous
+- Integration with `/studio` setup workflow
+
+**Acceptance Criteria**:
+- Document exists with concrete commands
+- SSH tunnel example is copy-pasteable
+- Follows standard resource file format
+
+---
+
+#### S2-T4: Enhance state-lib.sh — JSON canonical model
+**PRD Ref**: STATE-001
+**SDD Ref**: C3.2 (State Architecture Revised)
+**File**: `.claude/scripts/lib/state-lib.sh` (MODIFY)
+
+**Description**: Add drift detection, backup, and schema versioning to state-lib.sh.
+
+New/modified functions:
+```bash
+state_sync "studio"                    # Now adds <!-- GENERATED --> header + source hash
+state_check "studio"                   # Compares MD hash vs JSON hash, returns drift status
+state_backup "studio"                  # Copies JSON + MD to .bak with timestamp
+state_schema_version "studio"          # Returns _schema_version from JSON
+```
+
+Changes to `state_sync`:
+- Output starts with: `<!-- GENERATED — DO NOT EDIT. Source: grimoire/.state/studio.json (hash: <sha256>) -->`
+- Backup previous MD to `.bak` before overwriting
+
+Changes to `state_init`:
+- Add `"_schema_version": "1.0"` and `"_generated_at"` to new JSON files
+
+Deprecation:
+- `state_migrate` — add warning: "DEPRECATED: one-time migration utility only"
+
+**Acceptance Criteria**:
+- `state_sync` output starts with GENERATED comment containing hash
+- `state_check "studio"` detects when MD was manually edited (hash mismatch)
+- `state_backup "studio"` creates timestamped `.bak` files
+- New JSON files include `_schema_version: "1.0"`
+- Round-trip test: `state_sync → state_check` passes (exit 0)
+
+---
+
+#### S2-T5: Integrate security libs into provider scripts
+**PRD Ref**: SEC-001, SEC-003
+**Files**: `.claude/scripts/studio/provider-spinup.sh`, `.claude/scripts/studio/provider-teardown.sh`, `.claude/scripts/studio/provider-validate.sh`, `.claude/scripts/studio/providers/vastai-lifecycle.sh` (MODIFY)
+
+**Description**: All provider scripts must source `validate-lib.sh` and `secrets-lib.sh`. Validate inputs. Use `safe_log` for any output that might contain credentials.
+
+**Acceptance Criteria**:
+- All provider scripts source both security libraries
+- Provider IDs validated via `validate_provider_id`
+- API key loading via `load_secret`
+- Log output uses `safe_log`
+
+---
+
+#### S2-T6: Create test-comfyui-security.sh and test-state-enhanced.sh
+**PRD Ref**: SEC-002, STATE-001
+**Files**: `tests/test-comfyui-security.sh` (NEW), `tests/test-state-enhanced.sh` (NEW)
+
+**Description**: Test suites for ComfyUI security and enhanced state management.
+
+`test-comfyui-security.sh`:
+- Localhost URL passes
+- Public IP fails
+- Private IP warns
+- `--allow-remote` overrides
+
+`test-state-enhanced.sh`:
+- `state_sync` generates header with hash
+- `state_check` passes after clean sync
+- `state_check` fails after manual MD edit
+- `state_backup` creates .bak files
+- `state_schema_version` returns correct version
+
+**Acceptance Criteria**:
+- Both test files pass via `tests/run-all.sh`
+- Cover all acceptance criteria from S2-T1 and S2-T4
+
+---
+
+## Sprint 3 (Global #13): Operational Resilience
+
+**Label**: Operational Resilience
+**Goal**: Prevent resource contention, enforce cost limits, and validate ComfyUI nodes before workflow submission.
+
+### Tasks
+
+#### S3-T1: Create resource-lock.sh — Advisory Lock Library
+**PRD Ref**: OPS-001
+**SDD Ref**: C3.3 (Resource Contention)
+**File**: `.claude/scripts/lib/resource-lock.sh` (NEW)
+
+**Description**: Create the advisory lock mechanism using lockfiles.
+
+Functions:
+```bash
+lock_acquire <resource> [--timeout 30] [--holder "art"]
+lock_release <resource>
+lock_check <resource>                  # Returns JSON: holder, PID, time
+lock_force_release <resource>          # Admin override
+```
+
+Lock file: `/tmp/ategnatos-lock-<resource_hash>.lock` containing JSON with resource, holder, pid, acquired_at.
+
+Resource naming: `comfyui:<host>:<port>`, `gpu:<provider>:<instance_id>`, `training:<run_id>`
+
+Stale detection: if PID not running (`kill -0 $pid`), auto-release with warning.
+
+**Acceptance Criteria**:
+- `lock_acquire comfyui:localhost:8188` creates lockfile
+- Second `lock_acquire` on same resource fails with holder info
+- `lock_release` cleans up lockfile
+- Dead PID triggers auto-release
+
+---
+
+#### S3-T2: Create cost-guard.sh — Budget Enforcement Library
+**PRD Ref**: OPS-003
+**SDD Ref**: C3.4 (Cost Enforcement)
+**Files**: `.claude/scripts/lib/cost-guard.sh` (NEW), `grimoire/cost-config.json` (NEW)
+
+**Description**: Create cost enforcement library and default config.
+
+Config file `grimoire/cost-config.json`:
+```json
+{
+  "max_hourly_rate": 3.00,
+  "max_total_cost": 50.00,
+  "max_runtime_minutes": 480,
+  "auto_teardown_minutes": 60,
+  "require_confirm": true
+}
+```
+
+Functions:
+```bash
+cost_check --operation <type> --estimated <amount>
+cost_start_timer --resource <id> --max-minutes <N>
+cost_stop_timer --resource <id>
+cost_teardown_overdue
+cost_report
+```
+
+Timer storage: `/tmp/ategnatos-cost-timer-<resource_hash>.json`
+
+**Acceptance Criteria**:
+- `cost_check --operation train --estimated 5.00` with `max_total_cost: 3.00` exits 1
+- `cost_start_timer` creates timer file
+- `cost_teardown_overdue` detects expired timers
+- Default config created with sensible limits
+
+---
+
+#### S3-T3: Create comfyui-preflight.sh — Node Validation
+**PRD Ref**: COMFY-001
+**SDD Ref**: C3.7 (ComfyUI Preflight)
+**File**: `.claude/scripts/studio/comfyui-preflight.sh` (NEW)
+
+**Description**: Pre-flight check that validates all workflow nodes are installed.
+
+Interface: `comfyui-preflight.sh --workflow <path.json> --url <endpoint> [--json]`
+
+Steps:
+1. Query ComfyUI `/object_info` → installed node types
+2. Parse workflow JSON → extract all `class_type` values
+3. Compare → report missing nodes
+4. Look up missing in node-registry.md → provide install instructions
+5. Exit 0 if all present, exit 1 if missing
+
+Must source `validate-lib.sh` for input validation.
+
+**Acceptance Criteria**:
+- Correctly identifies installed vs missing nodes
+- Reports install instructions from node registry
+- `--json` outputs structured report
+- Uses `validate_url` and `validate_json_file`
+
+---
+
+#### S3-T4: Create node-registry.md — ComfyUI Node Package Map
+**PRD Ref**: COMFY-001
+**SDD Ref**: C3.7 (Node Registry)
+**File**: `.claude/skills/studio/resources/comfyui/node-registry.md` (NEW)
+
+**Description**: Reference document mapping ComfyUI node class types to their packages.
+
+Format:
 ```markdown
-# CUDA Compatibility
-
-For the full CUDA/PyTorch/Driver compatibility matrix, see the canonical reference:
-
-→ Read `.claude/skills/train/resources/environment/cuda-pytorch-matrix.md`
-
-That file is the single source of truth for all CUDA compatibility information,
-used by both `/studio` and `/train`.
+| Node Class | Package | Install Command | Notes |
+|-----------|---------|----------------|-------|
+| ControlNetApplyAdvanced | comfyui_controlnet_aux | cd custom_nodes && git clone ... | ControlNet |
+| UpscaleModelLoader | built-in | N/A | Included with ComfyUI |
 ```
 
-**Acceptance Criteria**: One canonical CUDA file. Studio references it. No duplicated data.
+Cover nodes used in existing templates: txt2img-sdxl, txt2img-flux, lora-test, img2img, controlnet, upscale, batch.
+
+**Acceptance Criteria**:
+- All nodes from existing templates mapped
+- Install commands are copy-pasteable
+- Built-in vs custom clearly marked
 
 ---
 
-#### S1-T5: Resolve Lambda Cloud provider status
-**PRD Ref**: DOC-002
-**Files**: `.claude/scripts/studio/provider-spinup.sh`, `.claude/skills/studio/resources/providers/provider-guide.md`, `.claude/skills/studio/resources/providers/lambda.md`
+#### S3-T5: Integrate preflight into comfyui-submit.sh
+**PRD Ref**: COMFY-001
+**SDD Ref**: C3.7
+**File**: `.claude/scripts/studio/comfyui-submit.sh` (MODIFY)
 
-**Fixes**:
-1. `provider-spinup.sh` line 128-131: Change error message from implying Lambda is broken to explaining it's manual-only
-2. `provider-guide.md`: Mark Lambda as "Manual Only — no CLI automation"
-3. `lambda.md`: Document the manual workflow (web dashboard → SSH → use provider-validate.sh)
+**Description**: Run `comfyui-preflight.sh` before workflow submission.
 
-**Acceptance Criteria**: Lambda clearly documented as manual-only. No suggestion it's "unsupported" — it's supported, just not automated.
+**Changes**:
+- Call `comfyui-preflight.sh` before submission (after security check)
+- Add `--skip-preflight` flag to bypass
+- On preflight failure: exit 1 with missing node list
 
----
-
-### Sprint 1 Success Criteria
-- All 3 bugs verified fixed
-- CUDA files consolidated
-- Lambda status clear
-- `grep -oP` gone from entire codebase
+**Acceptance Criteria**:
+- Preflight runs by default before submission
+- `--skip-preflight` bypasses the check
+- Missing nodes reported clearly
 
 ---
 
-## Sprint 2 (Global #8): Training Pipeline Completeness
+#### S3-T6: Create test-resource-lock.sh, test-cost-guard.sh, test-comfyui-preflight.sh
+**PRD Ref**: OPS-001, OPS-003, COMFY-001
+**Files**: `tests/test-resource-lock.sh` (NEW), `tests/test-cost-guard.sh` (NEW), `tests/test-comfyui-preflight.sh` (NEW)
 
-**Label**: Training Pipeline Completeness
-**Goal**: Complete the training toolchain — Gate 4 script, dataset structuring, SKILL.md restructure, model database docs.
+**Description**: Test suites for Sprint 3 deliverables.
+
+`test-resource-lock.sh`:
+- Acquire, check, release cycle
+- Double-acquire fails
+- Stale PID auto-release
+
+`test-cost-guard.sh`:
+- Budget check pass/fail
+- Timer create/check/stop
+- Overdue detection
+
+`test-comfyui-preflight.sh`:
+- Workflow parsing (extract class_type values)
+- Missing node detection (mock /object_info response)
+
+**Acceptance Criteria**:
+- All three test files pass via `tests/run-all.sh`
+
+---
+
+## Sprint 4 (Global #14): SSH, Recovery, Specs & E2E
+
+**Label**: SSH, Recovery, Specs & E2E
+**Goal**: Complete SSH resilience, training recovery, remaining ComfyUI ops, specification documents, and validate all Cycle 3 goals end-to-end.
 
 ### Tasks
 
-#### S2-T1: Create dry-run.sh for Gate 4
-**PRD Ref**: ARCH-001
-**New file**: `.claude/scripts/train/dry-run.sh`
+#### S4-T1: Create ssh-lib.sh — SSH Resilience Library
+**PRD Ref**: OPS-002
+**SDD Ref**: C3.5 (SSH Resilience)
+**File**: `.claude/scripts/lib/ssh-lib.sh` (NEW)
 
-**Interface**:
+**Description**: SSH execution library with retry, tmux, and phase markers.
+
+Functions:
 ```bash
-dry-run.sh --config <path> --backend <kohya|simpletuner|ai-toolkit> [--steps 5] [--json]
+ssh_exec <host> <command> [--retries 3] [--backoff-base 5]
+ssh_tmux_create <host> <session_name>
+ssh_tmux_send <host> <session_name> <command>
+ssh_tmux_attach <host> <session_name>
+ssh_phase_mark <host> <phase_name>
+ssh_phase_check <host> <phase_name>
+ssh_reconnect_status <host>
 ```
 
-**Behavior**:
-1. Read config to get model path, dataset path, LoRA parameters
-2. Per backend:
-   - kohya: `accelerate launch train_network.py ... --max_train_steps=5`
-   - simpletuner: Modify config `max_train_steps`, run
-   - ai-toolkit: Modify YAML `steps`, run
-3. Capture stdout/stderr
-4. On success (exit 0): report VRAM peak, time taken
-5. On failure (exit 1): categorize error (OOM, CUDA, missing file, config) and suggest fix
+Phase markers: `~/.ategnatos-phases/<phase_name>.done` on remote host.
+Retry: exponential backoff (5s, 10s, 20s), connection timeout 10s per attempt.
 
-**Acceptance Criteria**: Script accepts all 3 backends. Reports pass/fail with actionable diagnosis. Exits cleanly on all error paths.
+Must source `validate-lib.sh` and `secrets-lib.sh`.
+
+**Acceptance Criteria**:
+- `ssh_exec` retries on connection failure
+- Phase markers written and checked correctly
+- tmux session creation is idempotent
+- Uses `safe_log` for output containing host/key info
 
 ---
 
-#### S2-T2: Create structure-dataset.sh for Kohya folders
-**PRD Ref**: ARCH-005
-**New file**: `.claude/scripts/train/structure-dataset.sh`
+#### S4-T2: Enhance monitor-training.sh — Disk & Checkpoint Monitoring
+**PRD Ref**: OPS-004
+**SDD Ref**: C3.6 (Training Recovery)
+**File**: `.claude/scripts/train/monitor-training.sh` (MODIFY)
 
-**Interface**:
-```bash
-structure-dataset.sh --input <flat_dir> --output <kohya_dir> --name <concept> [--repeats <N|auto>] [--epochs 15] [--target-steps 1500] [--json]
+**Description**: Add disk space monitoring, checkpoint integrity validation, and training-state.json management.
+
+New capabilities:
+1. Disk space: `df -h <training_dir>` — warn at 90%, abort at 95%
+2. Checkpoint integrity: verify file size > 0, file not still being written
+3. Process health: verify training PID is still running
+4. VRAM usage logging
+
+New file: `grimoire/training/training-state.json` — persisted metadata:
+```json
+{
+  "run_id": "train-20260212-120000",
+  "backend": "kohya",
+  "config_path": "workspace/configs/mystyle.toml",
+  "dataset_path": "workspace/datasets/mystyle/",
+  "output_dir": "workspace/training/mystyle/",
+  "status": "running",
+  "started_at": "...",
+  "last_checkpoint": "...",
+  "last_checkpoint_at": "...",
+  "total_steps": 1500,
+  "completed_steps": 750,
+  "provider": "vast",
+  "instance_id": "12345"
+}
 ```
 
-**Behavior**:
-1. Validate input dir has images + matching .txt caption files
-2. Create `<output>/<repeats>_<name>/` directory
-3. Copy images + captions into structured directory
-4. Auto-calculate repeats when `--repeats auto`:
-   - `repeats = ceil(target_steps / (image_count * epochs))`
-   - Example: 25 images, 15 epochs, 1500 target steps → `repeats = ceil(1500 / (25 * 15)) = 4`
-5. Report: "Created 4_mystyle/ with 25 images (4 repeats × 25 images × 15 epochs = 1,500 steps)"
+Resume command per backend:
+- Kohya: `--network_weights <checkpoint> --initial_epoch <epoch>`
+- SimpleTuner: `--resume_from_checkpoint <checkpoint>`
+- AI-Toolkit: restart with same config (auto-resumes)
 
-**Acceptance Criteria**: Creates valid Kohya folder structure. Auto-calc matches formula. Preserves caption file pairing.
-
----
-
-#### S2-T3: Update dataset-audit.sh with Kohya format detection
-**PRD Ref**: ARCH-005
-**File**: `.claude/scripts/train/dataset-audit.sh`
-
-**Addition**: After existing checks, detect dataset format:
-- Flat: all images in one directory
-- Kohya: `{N}_{name}/` subdirectory pattern detected
-- Mixed: some structure but incomplete
-
-When flat format detected and kohya backend configured, suggest:
-```
-Dataset format: flat (all images in one directory)
-For Kohya training, run: structure-dataset.sh --input <dir> --output <dir> --name <concept> --repeats auto
-```
-
-**Acceptance Criteria**: Format detection works for flat, kohya, and mixed. Suggestion only appears when relevant.
+**Acceptance Criteria**:
+- Disk space check warns at 90%, aborts at 95%
+- Checkpoint size > 0 validation
+- training-state.json written and updated
+- Resume command correct per backend
 
 ---
 
-#### S2-T4: Split train SKILL.md into sub-documents
-**PRD Ref**: DOC-003
+#### S4-T3: Create comfyui-version-check.sh + compatibility.md
+**PRD Ref**: COMFY-002
+**SDD Ref**: C3.7
+**Files**: `.claude/scripts/studio/comfyui-version-check.sh` (NEW), `.claude/skills/studio/resources/comfyui/compatibility.md` (NEW)
 
-**Restructure**:
-1. Create `.claude/skills/train/resources/workflows/dataset-workflow.md` — extract Phases 1-6
-2. Create `.claude/skills/train/resources/workflows/execution-workflow.md` — extract Phases 7-10
-3. Create `.claude/skills/train/resources/workflows/evaluation-workflow.md` — extract Phases 11-13
-4. Reduce `SKILL.md` to: role definition, state files, four gates table, rules, reference table, and read instructions pointing to sub-documents
+**Description**: Version pinning for ComfyUI.
 
-**Acceptance Criteria**: SKILL.md under 200 lines. Sub-documents contain full workflow detail. No content lost in split.
+Script: `comfyui-version-check.sh --url <endpoint> [--json]`
+- Queries ComfyUI API for version/commit info
+- Compares against minimum supported version from compatibility.md
+- Reports pass/fail
 
----
+Document: minimum supported ComfyUI version, known breaking changes, template version tagging.
 
-#### S2-T5: Document custom model database extension
-**PRD Ref**: DOC-004
-
-**Updates**:
-1. Studio SKILL.md: add "Adding a Model" workflow section
-2. Clarify: `model-database.md` = built-in reference (framework-maintained)
-3. Clarify: `grimoire/studio.md` Models table = user's registry (user-maintained)
-4. Studio skill reads BOTH sources when recommending models
-
-**Acceptance Criteria**: Clear documentation of which file to edit. Studio skill describes the "add model" workflow.
+**Acceptance Criteria**:
+- Script queries ComfyUI and returns version info
+- Compatibility doc specifies minimum version
+- `--json` outputs structured result
 
 ---
 
-### Sprint 2 Success Criteria
-- Gate 4 has a dedicated script (`dry-run.sh`)
-- Kohya folder structuring automated
-- Train SKILL.md manageable at <200 lines
-- Model database extensibility documented
+#### S4-T4: Create captioning-protocol.md
+**PRD Ref**: SPEC-001
+**File**: `.claude/skills/train/resources/workflows/captioning-protocol.md` (NEW)
+
+**Description**: Concrete specification for the style-aware captioning protocol.
+
+Must include:
+- VLM prompt templates for content and style captioning
+- Output format: `{trigger_word}, {content_description}, {style_description}`
+- Token budget per caption (target: 50-150 tokens)
+- Batch processing strategy
+- Quality gate: minimum caption length, required style terms, trigger word presence
+- Example captions demonstrating content + style separation
+
+Integration: reference from `dataset-audit.sh` for caption quality metrics.
+
+**Acceptance Criteria**:
+- Concrete prompt templates (copy-pasteable)
+- Example captions for at least 3 image types
+- Quality gate thresholds defined
+- Token budget documented
 
 ---
 
-## Sprint 3 (Global #9): Generation Pipeline Expansion
+#### S4-T5: Create provider-contract.md
+**PRD Ref**: SPEC-002
+**File**: `.claude/skills/studio/resources/providers/provider-contract.md` (NEW)
 
-**Label**: Generation Pipeline Expansion
-**Goal**: Expand `/art` beyond txt2img — add img2img, ControlNet, batch generation, workflow management, upscaling.
+**Description**: Formal interface specification for GPU provider adapters.
 
-### Tasks
+Must include:
+- Required functions: `spinup()`, `teardown()`, `status()`, `ssh_connect()`
+- State machine: `PENDING → RUNNING → STOPPING → TERMINATED`
+- Idempotency rules
+- Timeout policy per operation
+- Required outputs: instance_id, ssh_host, ssh_port, gpu_type, cost_per_hour
+- Billing detection
+- Contract test checklist for adapter validation
 
-#### S3-T1: Create img2img and ControlNet workflow templates
-**PRD Ref**: ARCH-003
-
-**New files**:
-- `.claude/skills/studio/resources/comfyui/templates/img2img-sdxl.json`
-- `.claude/skills/studio/resources/comfyui/templates/img2img-flux.json`
-- `.claude/skills/studio/resources/comfyui/templates/controlnet-sdxl.json`
-
-Each template: valid ComfyUI API JSON with LoadImage node for source/control image, documented input points for customization.
-
-**Acceptance Criteria**: Templates are valid JSON. Input nodes clearly identified. LoadImage nodes reference uploadable filenames.
-
----
-
-#### S3-T2: Add image upload to comfyui-submit.sh
-**PRD Ref**: ARCH-003
-**File**: `.claude/scripts/studio/comfyui-submit.sh`
-
-**Addition**: `--upload <image>` flag:
-1. POST image to `${BASE_URL}/upload/image`
-2. Get returned filename from response
-3. Substitute filename into workflow JSON (replace placeholder `INPUT_IMAGE`)
-4. Then submit workflow as normal
-
-**Acceptance Criteria**: Image upload works. Workflow JSON updated with server-side filename. Error handling for upload failures.
+**Acceptance Criteria**:
+- State machine diagram (text-based)
+- All required functions documented with signatures
+- Idempotency rules explicit
+- Contract test checklist usable for validation
 
 ---
 
-#### S3-T3: Update art SKILL.md for img2img and ControlNet
-**PRD Ref**: ARCH-003
-**File**: `.claude/skills/art/SKILL.md`
+#### S4-T6: End-to-End Goal Validation
+**PRD Ref**: All
+**SDD Ref**: All
 
-**Additions**:
-1. Generation mode detection: "modify this image" → img2img, "use this for pose" → ControlNet, default → txt2img
-2. For img2img: request source image, set denoise strength (explain in plain language)
-3. For ControlNet: request control image, explain what ControlNet does ("uses the structure from one image to guide generation of another")
-4. Workflow selection: reads correct template based on mode + model
+**Description**: Validate that all Cycle 3 PRD goals are achieved.
 
-**Acceptance Criteria**: Art skill recognizes all 3 generation modes. Each mode has clear workflow. Plain-language explanations for img2img strength and ControlNet.
+| Goal | Validation Action | Expected Result |
+|------|-------------------|-----------------|
+| Zero critical security gaps | `shellcheck .claude/scripts/**/*.sh` + `grep -r 'eval '` | shellcheck clean, no eval |
+| ComfyUI endpoints secured | `comfyui-security-check.sh --url http://127.0.0.1:8188` + test with public IP | Pass/fail as expected |
+| Secrets never in logs | `grep -r 'API_KEY\|SECRET\|PASSWORD' grimoire/` | Zero results |
+| Single source of truth | `state_sync → state_check` round-trip | Hash matches |
+| Enforceable cost protection | `cost_check` with over-budget amount | Exits 1 |
+| Training survives interruptions | `training-state.json` schema validation + resume command check | Valid state + correct commands |
+| Custom node validation | `comfyui-preflight.sh` with mock data | Detects missing nodes |
+| Resource contention prevented | `lock_acquire` → second acquire | Second fails |
 
----
+Run full test suite: `tests/run-all.sh`
 
-#### S3-T4: Add batch generation support
-**PRD Ref**: ARCH-004
-
-**Changes**:
-1. Art SKILL.md: "generate N variations" sets `batch_size` in workflow JSON
-2. Art SKILL.md: "try these prompts" iterates over prompt list, submits each
-3. Queue pattern: submit all workflows, collect prompt_ids, poll all, present results together
-4. Results presented as numbered grid for comparison
-
-**Acceptance Criteria**: "Generate 4 variations" produces 4 images. Multiple prompts each generate separately. Results presented together for comparison.
-
----
-
-#### S3-T5: Create workflow-manage.sh
-**PRD Ref**: ARCH-002
-**New file**: `.claude/scripts/studio/workflow-manage.sh`
-
-**Interface**:
-```bash
-workflow-manage.sh save <name> <workflow.json>     # Copy to grimoire/workflows/<name>.json
-workflow-manage.sh list                             # List templates/ + grimoire/workflows/
-workflow-manage.sh get <name>                       # Output workflow JSON to stdout
-workflow-manage.sh delete <name>                    # Remove from grimoire/workflows/
-```
-
-**Sources**: built-in from `resources/comfyui/templates/` (read-only) + user-saved from `grimoire/workflows/` (read/write)
-
-**Acceptance Criteria**: All 4 subcommands work. List shows both sources with [built-in] / [saved] labels. Can't delete built-in templates.
-
----
-
-#### S3-T6: Integrate upscaling into export pipeline
-**PRD Ref**: INFRA-003
-
-**Changes**:
-1. New template: `.claude/skills/studio/resources/comfyui/templates/upscale-esrgan.json`
-2. Update `export-asset.sh`: add `--upscale 2x|4x` flag
-   - If ComfyUI running: submit upscale workflow, poll, download
-   - If not: fallback to ImageMagick `convert -resize`
-3. Art SKILL.md: mention upscaling as export option
-4. Train SKILL.md (dataset workflow): mention upscaling for low-res dataset images
-
-**Acceptance Criteria**: `export-asset.sh --upscale 4x` works with both ComfyUI and ImageMagick fallback. Upscale template is valid JSON.
-
----
-
-### Sprint 3 Success Criteria
-- `/art` supports txt2img, img2img, and ControlNet
-- Batch generation works for N variations and multiple prompts
-- Workflow management (save/list/get/delete) functional
-- Upscaling available for both export and dataset prep
-
----
-
-## Sprint 4 (Global #10): Infrastructure & Testing
-
-**Label**: Infrastructure & Testing
-**Goal**: Add structured state backing for reliability and integration tests for verification.
-
-### Tasks
-
-#### S4-T1: Create state-lib.sh
-**PRD Ref**: INFRA-001
-**New file**: `.claude/scripts/lib/state-lib.sh`
-
-**Functions**:
-```bash
-state_init <scope>                        # Create grimoire/.state/<scope>.json
-state_get <scope> <jq_path>              # Read value
-state_set <scope> <jq_path> <value>      # Set value
-state_append <scope> <jq_path> <object>  # Append to array
-state_remove <scope> <jq_path> <key> <value>  # Remove from array by key match
-state_sync <scope>                        # Regenerate markdown from JSON
-state_migrate <scope>                     # Parse existing markdown into JSON
-```
-
-Requires: `jq`
-
-**Acceptance Criteria**: All functions work. `state_sync` produces valid markdown. `state_migrate` parses existing `studio.md` format.
-
----
-
-#### S4-T2: Implement studio.json state backing
-**PRD Ref**: INFRA-001
-
-**Changes**:
-1. Create `grimoire/.state/` directory
-2. `state_init "studio"` creates `grimoire/.state/studio.json` with schema from SDD C2.1
-3. `state_migrate "studio"` parses existing `grimoire/studio.md` into JSON
-4. Update `provider-teardown.sh`: replace `sed` operations with `state_remove` + `state_sync`
-5. `state_sync "studio"` regenerates `grimoire/studio.md` from JSON
-
-**Acceptance Criteria**: `studio.md` generated from JSON matches original format. `provider-teardown.sh` no longer uses `sed` for state updates.
-
----
-
-#### S4-T3: Create test framework runner
-**PRD Ref**: INFRA-002
-**New files**: `tests/run-all.sh`, `tests/lib/test-helpers.sh`
-
-**test-helpers.sh functions**:
-```bash
-assert_eq <expected> <actual> <message>
-assert_contains <haystack> <needle> <message>
-assert_file_exists <path> <message>
-assert_exit_code <expected> <command...>
-test_start <name>
-test_pass
-test_fail <reason>
-report_summary
-```
-
-**run-all.sh**: Discovers and runs all `tests/test-*.sh` files. Reports pass/fail count. Exits non-zero on any failure.
-
-**Acceptance Criteria**: Runner discovers tests. Helpers provide clear assertion output. Summary shows pass/fail/total.
-
----
-
-#### S4-T4: Create script help tests
-**PRD Ref**: INFRA-002
-**New file**: `tests/test-scripts-help.sh`
-
-Tests every script in `.claude/scripts/` with `--help`:
-- Verifies exit code 0
-- Verifies output contains usage information
-- Catches syntax errors in scripts
-
-**Acceptance Criteria**: Every script passes `--help` test. No bash syntax errors.
-
----
-
-#### S4-T5: Create dataset pipeline tests
-**PRD Ref**: INFRA-002
-**New files**: `tests/test-dataset-pipeline.sh`, `tests/fixtures/sample-images/` (5 small test images)
-
-Tests:
-1. `dataset-audit.sh` against sample images (checks format detection)
-2. `find-duplicates.sh` against samples (at least 2 similar)
-3. `structure-dataset.sh` creates Kohya folder format
-
-**Acceptance Criteria**: All 3 pipeline scripts tested. Fixture images committed. Tests pass on clean checkout.
-
----
-
-#### S4-T6: Create state-lib tests
-**PRD Ref**: INFRA-002
-**New file**: `tests/test-state-lib.sh`
-
-Tests:
-1. `state_init` creates JSON file
-2. `state_set` / `state_get` round-trip
-3. `state_append` adds to array
-4. `state_remove` removes by key
-5. `state_sync` produces markdown
-6. `state_migrate` parses markdown
-
-Uses temp directory — no side effects.
-
-**Acceptance Criteria**: All state-lib functions tested. Tests clean up after themselves.
-
----
-
-### Sprint 4 Success Criteria
-- State updates via JSON (no more sed on markdown)
-- Test suite passes on clean checkout
-- Every script has at least a help test
-- Dataset pipeline testable without real GPU
+**Acceptance Criteria**:
+- All 8 PRD goals validated
+- All test suites pass
+- No regressions in Cycle 1/2 functionality
 
 ---
 
 ## Summary
 
-| Sprint | Global ID | Label | Tasks | Priority |
-|--------|-----------|-------|-------|----------|
-| 1 | 7 | Bug Fixes & Quick Wins | 5 | P0 |
-| 2 | 8 | Training Pipeline Completeness | 5 | P0 |
-| 3 | 9 | Generation Pipeline Expansion | 6 | P0/P1 |
-| 4 | 10 | Infrastructure & Testing | 6 | P1 |
-| **Total** | | | **22** | |
+| Sprint | Global ID | Label | Tasks | PRD Requirements |
+|--------|-----------|-------|-------|------------------|
+| 1 | 11 | Security Foundation | 6 | SEC-001, SEC-003 |
+| 2 | 12 | Security Gates & State Architecture | 6 | SEC-002, STATE-001 |
+| 3 | 13 | Operational Resilience | 6 | OPS-001, OPS-003, COMFY-001 |
+| 4 | 14 | SSH, Recovery, Specs & E2E | 6 | OPS-002, OPS-004, COMFY-002, SPEC-001, SPEC-002 |
+
+## Appendix A: PRD Requirement Mapping
+
+| PRD Requirement | Severity | Sprint | Tasks |
+|----------------|----------|--------|-------|
+| SEC-001 (Scripting Standard) | 930 | Sprint 1 | S1-T1, S1-T3, S1-T5, S1-T6 |
+| SEC-003 (Secrets Management) | 880 | Sprint 1 | S1-T2, S1-T4, S1-T6 |
+| SEC-002 (ComfyUI Endpoint Security) | 900 | Sprint 2 | S2-T1, S2-T2, S2-T3, S2-T6 |
+| STATE-001 (JSON Canonical) | 780 | Sprint 2 | S2-T4, S2-T6 |
+| OPS-001 (Resource Lock) | 815 | Sprint 3 | S3-T1, S3-T6 |
+| OPS-003 (Cost Enforcement) | 740 | Sprint 3 | S3-T2, S3-T6 |
+| COMFY-001 (Node Validation) | 850 | Sprint 3 | S3-T3, S3-T4, S3-T5, S3-T6 |
+| OPS-002 (SSH Resilience) | 770 | Sprint 4 | S4-T1 |
+| OPS-004 (Training Recovery) | 710 | Sprint 4 | S4-T2 |
+| COMFY-002 (Version Pinning) | — | Sprint 4 | S4-T3 |
+| SPEC-001 (Captioning Protocol) | 845 | Sprint 4 | S4-T4 |
+| SPEC-002 (Provider Contract) | 760 | Sprint 4 | S4-T5 |
+
+## Appendix B: SDD Component Mapping
+
+| SDD Component | Sprint | Tasks |
+|---------------|--------|-------|
+| C3.1 validate-lib.sh | Sprint 1 | S1-T1 |
+| C3.1 secrets-lib.sh | Sprint 1 | S1-T2 |
+| C3.1 scripting-standard.md | Sprint 1 | S1-T3 |
+| C3.1 comfyui-security-check.sh | Sprint 2 | S2-T1 |
+| C3.2 state-lib.sh enhancements | Sprint 2 | S2-T4 |
+| C3.3 resource-lock.sh | Sprint 3 | S3-T1 |
+| C3.4 cost-guard.sh | Sprint 3 | S3-T2 |
+| C3.5 ssh-lib.sh | Sprint 4 | S4-T1 |
+| C3.6 monitor-training.sh | Sprint 4 | S4-T2 |
+| C3.7 comfyui-preflight.sh | Sprint 3 | S3-T3 |
+| C3.7 node-registry.md | Sprint 3 | S3-T4 |
+| C3.8 File system additions | Sprints 1-4 | All |
+| C3.9 Threat model | Sprint 4 | S4-T6 (validation) |
 
 ---
 
-*Sprint plan generated from PRD v2.0 and SDD Cycle 2 Addendum. 4 sprints, 22 tasks. Bugs first, then architectural gaps, then infrastructure.*
+*Sprint plan generated from Cycle 3 PRD and SDD. All tasks trace to Flatline Protocol findings via PRD requirement IDs.*

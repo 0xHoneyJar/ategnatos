@@ -20,6 +20,7 @@ CONFIG_PATH=""
 BACKEND=""
 DRY_RUN_STEPS=5
 JSON_MODE=false
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ──────────────────────────────────────────────
@@ -145,6 +146,7 @@ read_config_value() {
 # Read config to understand the training setup
 # ──────────────────────────────────────────────
 
+# shellcheck disable=SC2034
 case "$BACKEND" in
   kohya)
     MODEL_PATH=$(read_config_value "pretrained_model_name_or_path" "")

@@ -33,6 +33,7 @@ COMFYUI_URL="http://127.0.0.1:8188"
 COMFYUI_HOST="127.0.0.1"
 COMFYUI_PORT="8188"
 JSON_MODE=false
+# shellcheck disable=SC2034
 CHECKPOINT_DIR=""
 
 usage() {

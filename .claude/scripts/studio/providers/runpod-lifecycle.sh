@@ -14,6 +14,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../../lib/validate-lib.sh
+source "$SCRIPT_DIR/../../lib/validate-lib.sh"
+# shellcheck source=../../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../../lib/secrets-lib.sh"
+
 SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 

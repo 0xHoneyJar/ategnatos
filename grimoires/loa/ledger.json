@@ -1,7 +1,7 @@
 {
   "version": "0.13.0",
   "ledger": {
-    "global_counter": 10,
+    "global_counter": 14,
     "cycles": [
       {
         "cycle_id": 1,
@@ -58,7 +58,7 @@
         "cycle_id": 2,
         "label": "Hardening & Functional Completeness",
         "created_at": "2026-02-11",
-        "archived_at": null,
+        "archived_at": "2026-02-12",
         "sdd": "grimoires/loa/sdd.md",
         "sprints": [
           {
@@ -86,6 +86,43 @@
             "local_id": 4,
             "global_id": 10,
             "label": "Infrastructure & Testing",
+            "status": "completed",
+            "tasks": 6
+          }
+        ]
+      },
+      {
+        "cycle_id": 3,
+        "label": "Security, Resilience & Operational Maturity",
+        "created_at": "2026-02-12",
+        "archived_at": null,
+        "sdd": "grimoires/loa/sdd.md",
+        "sprints": [
+          {
+            "local_id": 1,
+            "global_id": 11,
+            "label": "Security Foundation",
+            "status": "completed",
+            "tasks": 6
+          },
+          {
+            "local_id": 2,
+            "global_id": 12,
+            "label": "Security Gates & State Architecture",
+            "status": "completed",
+            "tasks": 6
+          },
+          {
+            "local_id": 3,
+            "global_id": 13,
+            "label": "Operational Resilience",
+            "status": "completed",
+            "tasks": 6
+          },
+          {
+            "local_id": 4,
+            "global_id": 14,
+            "label": "SSH, Recovery, Specs & E2E",
             "status": "completed",
             "tasks": 6
           }

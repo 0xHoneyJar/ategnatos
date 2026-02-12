@@ -18,6 +18,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../lib/validate-lib.sh
+source "$SCRIPT_DIR/../lib/validate-lib.sh"
+# shellcheck source=../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../lib/secrets-lib.sh"
+
 GRIMOIRE_STUDIO=""
 PROVIDER=""
 GPU=""
@@ -85,6 +92,9 @@ if [[ -z "$PROVIDER" ]]; then
     echo "Error: --provider is required (vastai, runpod, lambda)" >&2
     exit 1
 fi
+
+# Validate provider against allowlist
+validate_provider_id "$PROVIDER"
 
 if [[ -z "$GPU" ]]; then
     echo "Error: --gpu is required (RTX_3090, RTX_4090, A100, H100, etc.)" >&2
