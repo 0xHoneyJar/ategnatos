@@ -247,8 +247,8 @@ do_pull() {
 
     # Parse ssh URL (format: ssh -p PORT root@IP)
     local port ip
-    port=$(echo "$ssh_url" | grep -oP '(?<=-p )\d+')
-    ip=$(echo "$ssh_url" | grep -oP '[^@\s]+$')
+    port=$(echo "$ssh_url" | sed -n 's/.*-p \([0-9]*\).*/\1/p')
+    ip=$(echo "$ssh_url" | sed -n 's/.*@\([^ ]*\)$/\1/p')
 
     mkdir -p "$LOCAL_PATH"
     echo "Downloading $REMOTE_PATH to $LOCAL_PATH..."

@@ -163,6 +163,22 @@ if $JSON_MODE; then
   CMYK_JSON=$(array_to_json "${CMYK_FILES[@]+"${CMYK_FILES[@]}"}")
   UNCAPTIONED_JSON=$(array_to_json "${UNCAPTIONED[@]+"${UNCAPTIONED[@]}"}")
 
+  # Detect dataset format
+  DATASET_FORMAT="flat"
+  KOHYA_DIRS_JSON="[]"
+  kohya_dirs=()
+  for d in "$DATASET_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    dirname=$(basename "$d")
+    if [[ "$dirname" =~ ^[0-9]+_ ]]; then
+      kohya_dirs+=("$dirname")
+    fi
+  done
+  if (( ${#kohya_dirs[@]} > 0 )); then
+    DATASET_FORMAT="kohya"
+    KOHYA_DIRS_JSON=$(array_to_json "${kohya_dirs[@]}")
+  fi
+
   jq -n \
     --arg dir "$DATASET_DIR" \
     --argjson total "$TOTAL" \
@@ -178,12 +194,16 @@ if $JSON_MODE; then
     --argjson corrupted_files "$CORRUPTED_JSON" \
     --argjson cmyk_files "$CMYK_JSON" \
     --argjson uncaptioned_files "$UNCAPTIONED_JSON" \
+    --arg format "$DATASET_FORMAT" \
+    --argjson kohya_dirs "$KOHYA_DIRS_JSON" \
     '{
       directory: $dir,
       total_images: $total,
       passing: $good,
       issues: $issues,
       min_resolution: $min_res,
+      dataset_format: $format,
+      kohya_directories: $kohya_dirs,
       below_resolution: {count: $low_res, files: $low_res_files},
       corrupted: {count: $corrupted, files: $corrupted_files},
       cmyk_color_space: {count: $cmyk, files: $cmyk_files},
@@ -238,6 +258,31 @@ else
     for f in "${UNCAPTIONED[@]}"; do
       echo "  - $f"
     done
+  fi
+  echo ""
+
+  # Dataset format detection
+  echo "--- Dataset Format ---"
+  KOHYA_DIRS=()
+  for d in "$DATASET_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    dirname=$(basename "$d")
+    if [[ "$dirname" =~ ^[0-9]+_ ]]; then
+      KOHYA_DIRS+=("$dirname")
+    fi
+  done
+
+  if (( ${#KOHYA_DIRS[@]} > 0 )); then
+    echo "Format: Kohya (structured)"
+    for kd in "${KOHYA_DIRS[@]}"; do
+      echo "  - $kd"
+    done
+  elif (( TOTAL > 0 )); then
+    echo "Format: flat (all images in one directory)"
+    echo "  Tip: For Kohya training, restructure with:"
+    echo "  structure-dataset.sh --input \"$DATASET_DIR\" --output <output_dir> --name <concept> --repeats auto"
+  else
+    echo "Format: empty (no images found)"
   fi
   echo ""
 

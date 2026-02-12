@@ -12,15 +12,17 @@ HOST="127.0.0.1"
 PORT="8188"
 JSON_MODE=false
 WORKFLOW_FILE=""
+UPLOAD_IMAGE=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --upload) UPLOAD_IMAGE="$2"; shift 2 ;;
     --json) JSON_MODE=true; shift ;;
     --help|-h)
-      echo "Usage: comfyui-submit.sh <workflow.json> [--host HOST] [--port PORT] [--json]"
+      echo "Usage: comfyui-submit.sh <workflow.json> [--host HOST] [--port PORT] [--upload IMAGE] [--json]"
       echo ""
       echo "Submit a ComfyUI workflow JSON for generation."
       echo ""
@@ -28,6 +30,8 @@ while [[ $# -gt 0 ]]; do
       echo "  workflow.json   Path to the workflow JSON file"
       echo "  --host HOST     ComfyUI host (default: 127.0.0.1)"
       echo "  --port PORT     ComfyUI port (default: 8188)"
+      echo "  --upload IMAGE  Upload an image before submission (for img2img/ControlNet)"
+      echo "                  Replaces INPUT_IMAGE placeholder in workflow JSON"
       echo "  --json          Output in JSON format"
       exit 0
       ;;
@@ -74,9 +78,43 @@ if ! jq empty "$WORKFLOW_FILE" 2>/dev/null; then
   exit 1
 fi
 
+# Upload image if requested (for img2img / ControlNet workflows)
+UPLOADED_FILENAME=""
+if [[ -n "$UPLOAD_IMAGE" ]]; then
+  if [[ ! -f "$UPLOAD_IMAGE" ]]; then
+    echo "Error: Upload image not found: $UPLOAD_IMAGE" >&2
+    exit 1
+  fi
+
+  UPLOAD_RESPONSE=$(curl -s -X POST "${BASE_URL}/upload/image" \
+    -F "image=@${UPLOAD_IMAGE}" \
+    -F "overwrite=true" 2>&1)
+
+  UPLOADED_FILENAME=$(echo "$UPLOAD_RESPONSE" | jq -r '.name // empty')
+
+  if [[ -z "$UPLOADED_FILENAME" ]]; then
+    if $JSON_MODE; then
+      echo '{"status":"error","message":"Image upload failed","raw_response":'"$UPLOAD_RESPONSE"'}'
+    else
+      echo "Error: Failed to upload image to ComfyUI." >&2
+      echo "Response: $UPLOAD_RESPONSE" >&2
+    fi
+    exit 1
+  fi
+
+  if ! $JSON_MODE; then
+    echo "Uploaded: $UPLOADED_FILENAME"
+  fi
+fi
+
 # Wrap workflow in the prompt API format
 # ComfyUI /prompt expects: { "prompt": { ...nodes... } }
 WORKFLOW_CONTENT=$(cat "$WORKFLOW_FILE")
+
+# Substitute uploaded filename into workflow if applicable
+if [[ -n "$UPLOADED_FILENAME" ]]; then
+  WORKFLOW_CONTENT=$(echo "$WORKFLOW_CONTENT" | sed "s/INPUT_IMAGE/$UPLOADED_FILENAME/g")
+fi
 
 # Check if the JSON already has a "prompt" key (API format) or is raw nodes
 if echo "$WORKFLOW_CONTENT" | jq -e '.prompt' >/dev/null 2>&1; then
