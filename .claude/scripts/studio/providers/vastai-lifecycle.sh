@@ -14,6 +14,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../../lib/validate-lib.sh
+source "$SCRIPT_DIR/../../lib/validate-lib.sh"
+# shellcheck source=../../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../../lib/secrets-lib.sh"
+
 SUBCOMMAND="${1:-}"
 shift 2>/dev/null || true
 
@@ -247,8 +255,8 @@ do_pull() {
 
     # Parse ssh URL (format: ssh -p PORT root@IP)
     local port ip
-    port=$(echo "$ssh_url" | grep -oP '(?<=-p )\d+')
-    ip=$(echo "$ssh_url" | grep -oP '[^@\s]+$')
+    port=$(echo "$ssh_url" | sed -n 's/.*-p \([0-9]*\).*/\1/p')
+    ip=$(echo "$ssh_url" | sed -n 's/.*@\([^ ]*\)$/\1/p')
 
     mkdir -p "$LOCAL_PATH"
     echo "Downloading $REMOTE_PATH to $LOCAL_PATH..."

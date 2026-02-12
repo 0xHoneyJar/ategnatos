@@ -69,6 +69,26 @@ Before doing anything, read these files:
 
 ### Phase 4: Generation
 
+**Detect generation mode** from the request:
+- Default → **txt2img** (text prompt to image)
+- "modify this image", "change this", "rework" → **img2img** (image + prompt to new image)
+- "use this for pose", "use this as reference", "match the structure of" → **ControlNet** (structural guidance)
+
+**For img2img:**
+1. Request the source image from the user
+2. Set denoise strength (explain: "This controls how much the image changes. 0.3 = subtle tweaks, 0.7 = major rework, 1.0 = completely new image")
+3. Use template: `img2img-sdxl.json` or `img2img-flux.json` based on model
+4. Submit with `--upload <source_image>` to handle image upload
+
+**For ControlNet:**
+1. Request the control image from the user
+2. Explain: "ControlNet uses the structure from your reference image — like the pose, edges, or depth — to guide how the new image is composed. The result follows the structure but creates entirely new content."
+3. Ask which ControlNet model to use (if multiple available in studio.md)
+4. Use template: `controlnet-sdxl.json`
+5. Submit with `--upload <control_image>` to handle image upload
+
+**For txt2img (default):**
+
 Check ComfyUI availability from `grimoire/studio.md`:
 
 **If ComfyUI is available:**
@@ -81,6 +101,29 @@ Check ComfyUI availability from `grimoire/studio.md`:
 1. Present the formatted prompt for the user to paste into their generation tool
 2. Include all settings (CFG, steps, sampler, seed if relevant)
 3. Ask the user to share results when ready
+
+### Batch Generation
+
+When the user asks for multiple outputs:
+
+**"Generate N variations":**
+1. Set `batch_size` in the workflow JSON to N (e.g., 4 variations)
+2. Submit a single workflow — ComfyUI generates all in one pass
+3. Present numbered results for comparison
+
+**"Try these prompts" (multiple different prompts):**
+1. Build a separate workflow for each prompt
+2. Submit all workflows, collecting prompt_ids
+3. Poll each prompt_id for completion
+4. Present all results together as a numbered grid for comparison
+
+**Queue pattern:**
+```
+Submit workflow 1 → prompt_id_1
+Submit workflow 2 → prompt_id_2
+Submit workflow 3 → prompt_id_3
+Poll all → collect results → present as grid
+```
 
 ### Phase 5: Feedback & Iteration
 
@@ -115,6 +158,7 @@ On approval:
 1. **Export** using `.claude/scripts/art/export-asset.sh`:
    - Resize to target dimensions if specified
    - Convert format (PNG, WebP) as needed
+   - Upscale with `--upscale 2x` or `--upscale 4x` (uses ComfyUI ESRGAN if available, ImageMagick fallback)
    - Export to `exports/` or a user-specified path
 
 2. **Log to library** in `grimoire/library/{model-family}/{name}.md`:
@@ -157,6 +201,7 @@ When the prompt library grows, detect patterns:
 | `resources/formats/asset-specs.md` | Common asset dimensions/formats | During export |
 | `resources/comfyui/api-reference.md` | ComfyUI REST API docs | When submitting workflows |
 | `resources/comfyui/workflow-anatomy.md` | How workflow JSONs work | When building workflows |
+| `resources/comfyui/templates/*.json` | Workflow templates (txt2img, img2img, controlnet, upscale) | When selecting workflow |
 
 ## Rules
 

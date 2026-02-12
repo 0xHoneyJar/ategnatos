@@ -7,28 +7,51 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../lib/validate-lib.sh
+source "$SCRIPT_DIR/../lib/validate-lib.sh"
+# shellcheck source=../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../lib/secrets-lib.sh"
+
 # Defaults
 HOST="127.0.0.1"
 PORT="8188"
 JSON_MODE=false
 WORKFLOW_FILE=""
+UPLOAD_IMAGE=""
+ALLOW_REMOTE=false
+SKIP_SECURITY=false
+SKIP_PREFLIGHT=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
+    --upload) UPLOAD_IMAGE="$2"; shift 2 ;;
+    --allow-remote) ALLOW_REMOTE=true; shift ;;
+    --skip-security) SKIP_SECURITY=true; shift ;;
+    --skip-preflight) SKIP_PREFLIGHT=true; shift ;;
     --json) JSON_MODE=true; shift ;;
     --help|-h)
-      echo "Usage: comfyui-submit.sh <workflow.json> [--host HOST] [--port PORT] [--json]"
-      echo ""
-      echo "Submit a ComfyUI workflow JSON for generation."
-      echo ""
-      echo "Arguments:"
-      echo "  workflow.json   Path to the workflow JSON file"
-      echo "  --host HOST     ComfyUI host (default: 127.0.0.1)"
-      echo "  --port PORT     ComfyUI port (default: 8188)"
-      echo "  --json          Output in JSON format"
+      cat <<'USAGE'
+Usage: comfyui-submit.sh <workflow.json> [--host HOST] [--port PORT] [--upload IMAGE] [--json]
+
+Submit a ComfyUI workflow JSON for generation.
+
+Arguments:
+  workflow.json      Path to the workflow JSON file
+  --host HOST        ComfyUI host (default: 127.0.0.1)
+  --port PORT        ComfyUI port (default: 8188)
+  --upload IMAGE     Upload an image before submission (for img2img/ControlNet)
+                     Replaces INPUT_IMAGE placeholder in workflow JSON
+  --allow-remote     Allow non-localhost ComfyUI endpoints
+  --skip-security    Skip security check (advanced users only)
+  --skip-preflight   Skip node preflight check
+  --json             Output in JSON format
+USAGE
       exit 0
       ;;
     *)
@@ -57,6 +80,21 @@ fi
 
 BASE_URL="http://${HOST}:${PORT}"
 
+# Security gate: validate endpoint before any network calls
+if ! $SKIP_SECURITY; then
+  SECURITY_ARGS=(--url "$BASE_URL")
+  $ALLOW_REMOTE && SECURITY_ARGS+=(--allow-remote)
+  $JSON_MODE && SECURITY_ARGS+=(--json)
+
+  if ! "$SCRIPT_DIR/comfyui-security-check.sh" "${SECURITY_ARGS[@]}"; then
+    if ! $JSON_MODE; then
+      safe_log "Security check failed for endpoint: $BASE_URL"
+      echo "Use --allow-remote for trusted remote endpoints, or --skip-security to bypass." >&2
+    fi
+    exit 1
+  fi
+fi
+
 # Check if ComfyUI is reachable
 if ! curl -s --connect-timeout 3 "${BASE_URL}/system_stats" >/dev/null 2>&1; then
   if $JSON_MODE; then
@@ -68,15 +106,63 @@ if ! curl -s --connect-timeout 3 "${BASE_URL}/system_stats" >/dev/null 2>&1; the
   exit 1
 fi
 
+# Preflight: validate all workflow nodes are installed
+if ! $SKIP_PREFLIGHT; then
+  PREFLIGHT_ARGS=(--workflow "$WORKFLOW_FILE" --url "$BASE_URL")
+  $JSON_MODE && PREFLIGHT_ARGS+=(--json)
+
+  if ! "$SCRIPT_DIR/comfyui-preflight.sh" "${PREFLIGHT_ARGS[@]}"; then
+    if ! $JSON_MODE; then
+      echo "Preflight failed — missing nodes detected." >&2
+      echo "Use --skip-preflight to bypass this check." >&2
+    fi
+    exit 1
+  fi
+fi
+
 # Read and validate workflow JSON
 if ! jq empty "$WORKFLOW_FILE" 2>/dev/null; then
   echo "Error: Invalid JSON in workflow file: $WORKFLOW_FILE" >&2
   exit 1
 fi
 
+# Upload image if requested (for img2img / ControlNet workflows)
+UPLOADED_FILENAME=""
+if [[ -n "$UPLOAD_IMAGE" ]]; then
+  if [[ ! -f "$UPLOAD_IMAGE" ]]; then
+    echo "Error: Upload image not found: $UPLOAD_IMAGE" >&2
+    exit 1
+  fi
+
+  UPLOAD_RESPONSE=$(curl -s -X POST "${BASE_URL}/upload/image" \
+    -F "image=@${UPLOAD_IMAGE}" \
+    -F "overwrite=true" 2>&1)
+
+  UPLOADED_FILENAME=$(echo "$UPLOAD_RESPONSE" | jq -r '.name // empty')
+
+  if [[ -z "$UPLOADED_FILENAME" ]]; then
+    if $JSON_MODE; then
+      echo '{"status":"error","message":"Image upload failed","raw_response":'"$UPLOAD_RESPONSE"'}'
+    else
+      echo "Error: Failed to upload image to ComfyUI." >&2
+      echo "Response: $UPLOAD_RESPONSE" >&2
+    fi
+    exit 1
+  fi
+
+  if ! $JSON_MODE; then
+    echo "Uploaded: $UPLOADED_FILENAME"
+  fi
+fi
+
 # Wrap workflow in the prompt API format
 # ComfyUI /prompt expects: { "prompt": { ...nodes... } }
 WORKFLOW_CONTENT=$(cat "$WORKFLOW_FILE")
+
+# Substitute uploaded filename into workflow if applicable
+if [[ -n "$UPLOADED_FILENAME" ]]; then
+  WORKFLOW_CONTENT="${WORKFLOW_CONTENT//INPUT_IMAGE/$UPLOADED_FILENAME}"
+fi
 
 # Check if the JSON already has a "prompt" key (API format) or is raw nodes
 if echo "$WORKFLOW_CONTENT" | jq -e '.prompt' >/dev/null 2>&1; then

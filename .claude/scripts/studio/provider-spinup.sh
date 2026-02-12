@@ -18,6 +18,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../lib/validate-lib.sh
+source "$SCRIPT_DIR/../lib/validate-lib.sh"
+# shellcheck source=../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../lib/secrets-lib.sh"
+
 GRIMOIRE_STUDIO=""
 PROVIDER=""
 GPU=""
@@ -86,6 +93,9 @@ if [[ -z "$PROVIDER" ]]; then
     exit 1
 fi
 
+# Validate provider against allowlist
+validate_provider_id "$PROVIDER"
+
 if [[ -z "$GPU" ]]; then
     echo "Error: --gpu is required (RTX_3090, RTX_4090, A100, H100, etc.)" >&2
     exit 1
@@ -125,8 +135,14 @@ check_provider_cli() {
             fi
             ;;
         lambda)
-            echo "Error: Lambda Cloud does not have a CLI. Use the web dashboard at lambdalabs.com." >&2
-            echo "  After launching an instance manually, use provider-validate.sh to verify it." >&2
+            echo "Lambda Cloud is manual-only — no CLI automation available." >&2
+            echo "" >&2
+            echo "  To use Lambda:" >&2
+            echo "  1. Launch an instance at lambdalabs.com/service/gpu-cloud" >&2
+            echo "  2. SSH in: ssh ubuntu@INSTANCE_IP" >&2
+            echo "  3. Validate: provider-validate.sh --host INSTANCE_IP --user ubuntu" >&2
+            echo "" >&2
+            echo "  See: .claude/skills/studio/resources/providers/lambda.md for full guide" >&2
             exit 1
             ;;
         *)

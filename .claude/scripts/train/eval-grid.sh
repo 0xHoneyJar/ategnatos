@@ -30,7 +30,10 @@ WIDTH=1024
 HEIGHT=1024
 SEED=""
 COMFYUI_URL="http://127.0.0.1:8188"
+COMFYUI_HOST="127.0.0.1"
+COMFYUI_PORT="8188"
 JSON_MODE=false
+# shellcheck disable=SC2034
 CHECKPOINT_DIR=""
 
 usage() {
@@ -99,7 +102,10 @@ while [[ $# -gt 0 ]]; do
         --width) WIDTH="$2"; shift 2 ;;
         --height) HEIGHT="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
-        --url) COMFYUI_URL="$2"; shift 2 ;;
+        --url) COMFYUI_URL="$2"
+               COMFYUI_HOST=$(echo "$2" | sed 's|https\{0,1\}://||' | cut -d: -f1)
+               COMFYUI_PORT=$(echo "$2" | sed 's|https\{0,1\}://||' | cut -d: -f2)
+               shift 2 ;;
         --checkpoints) CHECKPOINT_DIR="$2"; shift 2 ;;
         --json) JSON_MODE=true; shift ;;
         --help) usage ;;
@@ -249,10 +255,10 @@ if check_comfyui; then
             echo "$WORKFLOW" > "$WORKFLOW_FILE"
 
             if [[ -n "$STUDIO_SCRIPTS" && -x "$STUDIO_SCRIPTS/comfyui-submit.sh" ]]; then
-                PROMPT_ID=$("$STUDIO_SCRIPTS/comfyui-submit.sh" --workflow "$WORKFLOW_FILE" --url "$COMFYUI_URL" --json 2>/dev/null | jq -r '.prompt_id // empty') || true
+                PROMPT_ID=$("$STUDIO_SCRIPTS/comfyui-submit.sh" "$WORKFLOW_FILE" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --json 2>/dev/null | jq -r '.prompt_id // empty') || true
 
                 if [[ -n "$PROMPT_ID" ]]; then
-                    "$STUDIO_SCRIPTS/comfyui-poll.sh" --id "$PROMPT_ID" --url "$COMFYUI_URL" --output "$out_dir" --timeout 120 2>/dev/null || true
+                    "$STUDIO_SCRIPTS/comfyui-poll.sh" "$PROMPT_ID" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --output "$out_dir" --timeout 120 2>/dev/null || true
                     RESULTS+=("{\"prompt\":\"${prompt:0:50}\",\"weight\":$weight,\"status\":\"generated\",\"dir\":\"$out_dir\"}")
                 else
                     echo "  Warning: Submit failed for weight $weight"

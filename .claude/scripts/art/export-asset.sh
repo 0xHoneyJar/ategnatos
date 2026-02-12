@@ -14,6 +14,7 @@ FORMAT=""
 WIDTH=""
 HEIGHT=""
 QUALITY="90"
+UPSCALE=""
 JSON_MODE=false
 
 # Parse arguments
@@ -25,11 +26,12 @@ while [[ $# -gt 0 ]]; do
     --width|-w) WIDTH="$2"; shift 2 ;;
     --height) HEIGHT="$2"; shift 2 ;;
     --quality|-q) QUALITY="$2"; shift 2 ;;
+    --upscale) UPSCALE="$2"; shift 2 ;;
     --json) JSON_MODE=true; shift ;;
     --help|-h)
       echo "Usage: export-asset.sh <input> [OPTIONS]"
       echo ""
-      echo "Export an image with optional resize and format conversion."
+      echo "Export an image with optional resize, upscale, and format conversion."
       echo ""
       echo "Arguments:"
       echo "  input            Path to source image"
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --format FORMAT  Output format: png, webp, jpeg (default: same as input)"
       echo "  --width W        Resize width (maintains aspect ratio if height omitted)"
       echo "  --height H       Resize height (maintains aspect ratio if width omitted)"
+      echo "  --upscale 2x|4x  Upscale using ComfyUI (ESRGAN) or ImageMagick fallback"
       echo "  --quality Q      JPEG/WebP quality 1-100 (default: 90)"
       echo "  --json           Output in JSON format"
       exit 0
@@ -91,6 +94,90 @@ fi
 
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
+
+# Handle upscaling if requested
+if [[ -n "$UPSCALE" ]]; then
+  # Validate upscale factor
+  case "$UPSCALE" in
+    2x|4x) ;;
+    *) echo "Error: --upscale must be 2x or 4x." >&2; exit 1 ;;
+  esac
+
+  SCALE_FACTOR="${UPSCALE%x}"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  STUDIO_SCRIPTS="$(dirname "$SCRIPT_DIR")/scripts/studio"
+  TEMPLATE_DIR="$(dirname "$SCRIPT_DIR")/skills/studio/resources/comfyui/templates"
+
+  # Try ComfyUI first
+  COMFYUI_HOST="127.0.0.1"
+  COMFYUI_PORT="8188"
+  COMFYUI_AVAILABLE=false
+
+  if curl -s --connect-timeout 2 "http://${COMFYUI_HOST}:${COMFYUI_PORT}/system_stats" >/dev/null 2>&1; then
+    COMFYUI_AVAILABLE=true
+  fi
+
+  if $COMFYUI_AVAILABLE && [[ -f "$TEMPLATE_DIR/upscale-esrgan.json" ]]; then
+    # Use ComfyUI ESRGAN upscaling
+    TEMP_WORKFLOW=$(mktemp /tmp/upscale-workflow-XXXXXX.json)
+    trap "rm -f '$TEMP_WORKFLOW'" EXIT
+
+    # For 2x, we could use a 2x model, but ESRGAN 4x + downscale is simpler
+    cp "$TEMPLATE_DIR/upscale-esrgan.json" "$TEMP_WORKFLOW"
+
+    if ! $JSON_MODE; then
+      echo "Upscaling ${UPSCALE} via ComfyUI ESRGAN..."
+    fi
+
+    SUBMIT_SCRIPT="${STUDIO_SCRIPTS}/comfyui-submit.sh"
+    POLL_SCRIPT="${STUDIO_SCRIPTS}/comfyui-poll.sh"
+
+    if [[ -f "$SUBMIT_SCRIPT" && -f "$POLL_SCRIPT" ]]; then
+      PROMPT_ID=$("$SUBMIT_SCRIPT" "$TEMP_WORKFLOW" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --upload "$INPUT" --json 2>/dev/null | jq -r '.prompt_id // empty') || true
+
+      if [[ -n "$PROMPT_ID" ]]; then
+        "$POLL_SCRIPT" "$PROMPT_ID" --host "$COMFYUI_HOST" --port "$COMFYUI_PORT" --output "$OUTPUT_DIR" --timeout 300 2>/dev/null || true
+        # ComfyUI upscale always does 4x; if user wanted 2x, resize down
+        if [[ "$SCALE_FACTOR" == "2" ]]; then
+          for uf in "$OUTPUT_DIR"/ategnatos_upscale*.png; do
+            [[ -f "$uf" ]] || continue
+            if command -v convert >/dev/null 2>&1; then
+              convert "$uf" -resize 50% "$uf"
+            elif command -v sips >/dev/null 2>&1; then
+              CUR_W=$(sips -g pixelWidth "$uf" 2>/dev/null | tail -1 | awk '{print $2}')
+              NEW_W=$((CUR_W / 2))
+              sips --resampleWidth "$NEW_W" "$uf" >/dev/null 2>&1
+            fi
+          done
+        fi
+        INPUT="$OUTPUT_DIR/$(ls -t "$OUTPUT_DIR"/ategnatos_upscale*.png 2>/dev/null | head -1)" || true
+      fi
+    fi
+  else
+    # Fallback: ImageMagick resize
+    if command -v convert >/dev/null 2>&1; then
+      if ! $JSON_MODE; then
+        echo "Upscaling ${UPSCALE} via ImageMagick (no ComfyUI available)..."
+      fi
+      UPSCALE_PERCENT=$((SCALE_FACTOR * 100))
+      TEMP_UPSCALED=$(mktemp /tmp/upscaled-XXXXXX.png)
+      convert "$INPUT" -resize "${UPSCALE_PERCENT}%" "$TEMP_UPSCALED"
+      INPUT="$TEMP_UPSCALED"
+    elif command -v sips >/dev/null 2>&1; then
+      if ! $JSON_MODE; then
+        echo "Upscaling ${UPSCALE} via sips (no ComfyUI available)..."
+      fi
+      CUR_W=$(sips -g pixelWidth "$INPUT" 2>/dev/null | tail -1 | awk '{print $2}')
+      NEW_W=$((CUR_W * SCALE_FACTOR))
+      TEMP_UPSCALED=$(mktemp /tmp/upscaled-XXXXXX.png)
+      cp "$INPUT" "$TEMP_UPSCALED"
+      sips --resampleWidth "$NEW_W" "$TEMP_UPSCALED" >/dev/null 2>&1
+      INPUT="$TEMP_UPSCALED"
+    else
+      echo "Warning: No upscaling tool available. Skipping upscale." >&2
+    fi
+  fi
+fi
 
 # Detect available tool
 TOOL=""

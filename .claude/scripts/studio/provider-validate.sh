@@ -19,6 +19,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Source security libraries
+# shellcheck source=../lib/validate-lib.sh
+source "$SCRIPT_DIR/../lib/validate-lib.sh"
+# shellcheck source=../lib/secrets-lib.sh
+source "$SCRIPT_DIR/../lib/secrets-lib.sh"
+
 SSH_HOST=""
 SSH_PORT="22"
 SSH_KEY=""
@@ -95,6 +103,7 @@ SSH_OPTS=(-o "ConnectTimeout=${TIMEOUT}" -o "StrictHostKeyChecking=no" -o "Batch
 [[ -n "$SSH_KEY" ]] && SSH_OPTS+=(-i "$SSH_KEY")
 
 remote_cmd() {
+    # shellcheck disable=SC2029
     ssh "${SSH_OPTS[@]}" "$SSH_HOST" "$1" 2>/dev/null
 }
 
@@ -165,6 +174,7 @@ fi
 
 # Check 3: CUDA version
 echo -n "CUDA version... "
+# shellcheck disable=SC2034
 CUDA_VER=$(remote_cmd "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null; nvcc --version 2>/dev/null | grep 'release' | sed 's/.*release //' | cut -d',' -f1" || echo "")
 NVCC_VER=$(remote_cmd "nvcc --version 2>/dev/null | grep 'release' | sed 's/.*release //' | cut -d',' -f1" || echo "")
 if [[ -n "$NVCC_VER" ]]; then

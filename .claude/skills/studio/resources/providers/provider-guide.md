@@ -11,7 +11,7 @@ When your local GPU (the chip that generates AI images) isn't powerful enough (o
 |----------|---------|-------------|---------|-------------|
 | **Vast.ai** | Budget training | Wide variety (consumer + datacenter) | $0.10-2.50/hr | Moderate |
 | **RunPod** | Reliable training | Curated selection | $0.20-3.00/hr | Easy |
-| **Lambda** | High-end research | A100, H100 | $0.80-3.00/hr | Easy |
+| **Lambda** | High-end research | A100, H100 | $0.80-3.00/hr | Easy (manual only — no CLI automation) |
 | **Local** | No cloud needed | Whatever you have | Free (electricity) | Easiest |
 
 ### When to Use Cloud vs Local

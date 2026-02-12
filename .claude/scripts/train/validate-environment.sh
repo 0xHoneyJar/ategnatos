@@ -51,6 +51,8 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
   GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | xargs)
   GPU_VRAM_GB=$(echo "$GPU_VRAM / 1024" | bc -l 2>/dev/null | xargs printf "%.1f")
+  # Collected for environment reporting
+  # shellcheck disable=SC2034
   CUDA_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | xargs)
   CUDA_RT=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release //' | sed 's/,.*//' || echo "not found")
   add_check "GPU" "PASS" "$GPU_NAME (${GPU_VRAM_GB} GB)"
@@ -199,4 +201,4 @@ else
   fi
 fi
 
-exit $FAIL_COUNT
+exit "$FAIL_COUNT"

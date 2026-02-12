@@ -60,7 +60,7 @@ detect_apple_silicon() {
     fi
 
     local chip_name memory_gb gpu_cores
-    chip_name=$(echo "$chip_info" | sed 's/.*: //')
+    chip_name="${chip_info##*: }"
     memory_gb=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Memory" | head -1 | sed 's/.*: //' | sed 's/ GB//')
     gpu_cores=$(system_profiler SPDisplaysDataType 2>/dev/null | grep "Total Number of Cores" | head -1 | sed 's/.*: //') || gpu_cores="unknown"
 
